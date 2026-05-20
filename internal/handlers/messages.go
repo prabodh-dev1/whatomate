@@ -426,8 +426,8 @@ func (a *App) finalizeMessageSend(msg *models.Message, req OutgoingMessageReques
 			a.WSHub.BroadcastToOrg(req.Account.OrganizationID, websocket.WSMessage{
 				Type: websocket.TypeStatusUpdate,
 				Payload: map[string]any{
-					"message_id":    msg.ID,
-					"contact_id":    req.Contact.ID,
+					"message_id":    msg.ID.String(),
+					"contact_id":    req.Contact.ID.String(),
 					"status":        models.MessageStatusFailed,
 					"error_message": errMsg,
 				},
@@ -452,8 +452,8 @@ func (a *App) finalizeMessageSend(msg *models.Message, req OutgoingMessageReques
 		a.WSHub.BroadcastToOrg(req.Account.OrganizationID, websocket.WSMessage{
 			Type: websocket.TypeStatusUpdate,
 			Payload: map[string]any{
-				"message_id": msg.ID,
-				"contact_id": req.Contact.ID,
+				"message_id": msg.ID.String(),
+				"contact_id": req.Contact.ID.String(),
 				"status":     models.MessageStatusSent,
 				"wamid":      wamid,
 			},

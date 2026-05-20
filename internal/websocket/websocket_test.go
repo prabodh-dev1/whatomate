@@ -324,28 +324,40 @@ func TestBroadcastMessage_FieldsSetCorrectly(t *testing.T) {
 // and messages are sent to it by broadcastMessage.
 func assertReceivesMessage(t *testing.T, client *websocket.Client, expectedType string) {
 	t.Helper()
-	// The send channel is accessible only internally; we need to read from it.
-	// Since we constructed the client with NewClient, we can use a helper approach:
-	// We rely on the fact that Client has a send channel that gets written to.
-	// We'll use a timeout to avoid hanging.
-	select {
-	case data := <-clientSendChan(client):
-		var msg websocket.WSMessage
-		err := json.Unmarshal(data, &msg)
-		require.NoError(t, err, "failed to unmarshal message from send channel")
-		assert.Equal(t, expectedType, msg.Type)
-	case <-time.After(2 * time.Second):
-		t.Fatalf("timed out waiting for message of type %s", expectedType)
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case data := <-clientSendChan(client):
+			var msg websocket.WSMessage
+			err := json.Unmarshal(data, &msg)
+			require.NoError(t, err, "failed to unmarshal message from send channel")
+			if msg.Type == websocket.TypeAuthOK {
+				continue
+			}
+			assert.Equal(t, expectedType, msg.Type)
+			return
+		case <-deadline:
+			t.Fatalf("timed out waiting for message of type %s", expectedType)
+		}
 	}
 }
 
 func assertNoMessage(t *testing.T, client *websocket.Client) {
 	t.Helper()
-	select {
-	case data := <-clientSendChan(client):
-		t.Fatalf("expected no message but got: %s", string(data))
-	case <-time.After(100 * time.Millisecond):
-		// Good -- no message received
+	deadline := time.After(100 * time.Millisecond)
+	for {
+		select {
+		case data := <-clientSendChan(client):
+			var msg websocket.WSMessage
+			err := json.Unmarshal(data, &msg)
+			require.NoError(t, err)
+			if msg.Type == websocket.TypeAuthOK {
+				continue
+			}
+			t.Fatalf("expected no message but got type %s: %s", msg.Type, string(data))
+		case <-deadline:
+			return
+		}
 	}
 }
 

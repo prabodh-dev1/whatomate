@@ -18,6 +18,10 @@ func newUpgrader(allowedOrigins map[string]bool) websocket.FastHTTPUpgrader {
 		WriteBufferSize: 1024,
 		CheckOrigin: func(ctx *fasthttp.RequestCtx) bool {
 			origin := string(ctx.Request.Header.Peek("Origin"))
+			// Browsers always send Origin for cross-origin WS; same-origin may omit it.
+			if origin == "" {
+				return true
+			}
 			return middleware.IsOriginAllowed(origin, allowedOrigins)
 		},
 	}

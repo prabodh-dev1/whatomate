@@ -11,6 +11,7 @@ type WSMessage struct {
 // Message types
 const (
 	TypeAuth          = "auth"
+	TypeAuthOK        = "auth_ok"
 	TypeNewMessage    = "new_message"
 	TypeStatusUpdate  = "status_update"
 	TypeContactUpdate = "contact_update"

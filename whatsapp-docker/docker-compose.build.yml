@@ -1,0 +1,15 @@
+# Build Whatomate from the submodule (includes WebSocket / real-time chat fixes).
+# From repo root:
+#   docker compose -f whatomate/whatsapp-docker/docker-compose.yml \
+#     -f whatomate/whatsapp-docker/docker-compose.devops.yml \
+#     -f whatomate/whatsapp-docker/docker-compose.build.yml \
+#     --profile whatomate build app
+#   docker compose -f whatomate/whatsapp-docker/docker-compose.yml \
+#     -f whatomate/whatsapp-docker/docker-compose.devops.yml \
+#     --profile whatomate up -d
+services:
+  app:
+    image: prabodh/whatomate:local
+    build:
+      context: ..
+      dockerfile: whatsapp-docker/Dockerfile

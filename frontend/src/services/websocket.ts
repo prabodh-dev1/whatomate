@@ -43,6 +43,7 @@ function showNotification(title: string, body: string, contactId: string) {
 
 // WebSocket message types
 const WS_TYPE_AUTH = 'auth'
+const WS_TYPE_AUTH_OK = 'auth_ok'
 const WS_TYPE_NEW_MESSAGE = 'new_message'
 const WS_TYPE_STATUS_UPDATE = 'status_update'
 const WS_TYPE_SET_CONTACT = 'set_contact'
@@ -96,28 +97,43 @@ interface WSMessage {
 class WebSocketService {
   private ws: WebSocket | null = null
   private reconnectAttempts = 0
-  private maxReconnectAttempts = 5
+  private maxReconnectAttempts = 15
   private reconnectDelay = 1000
   private pingInterval: number | null = null
   private isConnected = false
+  private isAuthenticated = false
   private hasConnectedBefore = false
+  private isConnecting = false
+  private pendingContactId: string | null | undefined = undefined
   private campaignStatsCallbacks: ((payload: any) => void)[] = []
+  private connectionCallbacks: ((connected: boolean) => void)[] = []
   private getTokenFn: (() => Promise<string | null>) | null = null
+  private visibilityHandler: (() => void) | null = null
+  private onlineHandler: (() => void) | null = null
 
   async connect(getToken?: () => Promise<string | null>) {
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    if (this.isConnecting) {
+      return
+    }
+    if (this.ws?.readyState === WebSocket.OPEN && this.isAuthenticated) {
       return
     }
 
-    // Store the token function for reconnects
     if (getToken) {
       this.getTokenFn = getToken
     }
 
-    // Get a fresh short-lived WS token
     const token = this.getTokenFn ? await this.getTokenFn() : null
     if (!token) {
+      this.scheduleReconnect()
       return
+    }
+
+    // Close a stale socket before opening a new one
+    if (this.ws) {
+      this.ws.onclose = null
+      this.ws.close()
+      this.ws = null
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -125,23 +141,21 @@ class WebSocketService {
     const basePath = ((window as any).__BASE_PATH__ ?? '').replace(/\/$/, '')
     const url = `${protocol}//${host}${basePath}/ws`
 
+    this.isConnecting = true
+    this.registerLifecycleHandlers()
+
     try {
       this.ws = new WebSocket(url)
 
       this.ws.onopen = () => {
-        // Send auth message as the first message (token not in URL for security)
+        this.isConnecting = false
         this.send({ type: WS_TYPE_AUTH, payload: { token } })
-
-        const isReconnection = this.hasConnectedBefore
-        this.isConnected = true
-        this.hasConnectedBefore = true
-        this.reconnectAttempts = 0
-        this.startPing()
-
-        // Force refresh data after reconnection to sync any missed updates
-        if (isReconnection) {
-          this.refreshStaleData()
-        }
+        // Backward compatible with servers that don't send auth_ok yet
+        setTimeout(() => {
+          if (this.ws?.readyState === WebSocket.OPEN && !this.isAuthenticated) {
+            this.onAuthenticated()
+          }
+        }, 2000)
       }
 
       this.ws.onmessage = (event) => {
@@ -149,8 +163,8 @@ class WebSocketService {
       }
 
       this.ws.onclose = () => {
-        this.isConnected = false
-        this.stopPing()
+        this.isConnecting = false
+        this.setConnected(false)
         this.handleReconnect()
       }
 
@@ -158,18 +172,94 @@ class WebSocketService {
         // Error handled by onclose
       }
     } catch {
+      this.isConnecting = false
       this.handleReconnect()
     }
   }
 
   disconnect() {
     this.stopPing()
+    this.unregisterLifecycleHandlers()
     if (this.ws) {
+      this.ws.onclose = null
       this.ws.close()
       this.ws = null
     }
-    this.isConnected = false
-    this.reconnectAttempts = this.maxReconnectAttempts // Prevent reconnect
+    this.setConnected(false)
+    this.reconnectAttempts = this.maxReconnectAttempts
+  }
+
+  private setConnected(connected: boolean) {
+    if (this.isConnected === connected && this.isAuthenticated === connected) {
+      return
+    }
+    this.isConnected = connected
+    this.isAuthenticated = connected
+    if (!connected) {
+      this.stopPing()
+    }
+    this.connectionCallbacks.forEach(cb => cb(connected))
+  }
+
+  private registerLifecycleHandlers() {
+    if (typeof document === 'undefined') return
+    if (!this.visibilityHandler) {
+      this.visibilityHandler = () => {
+        if (document.visibilityState === 'visible' && !this.getIsConnected()) {
+          this.reconnectAttempts = 0
+          this.connect()
+        }
+      }
+      document.addEventListener('visibilitychange', this.visibilityHandler)
+    }
+    if (!this.onlineHandler) {
+      this.onlineHandler = () => {
+        if (!this.getIsConnected()) {
+          this.reconnectAttempts = 0
+          this.connect()
+        }
+      }
+      window.addEventListener('online', this.onlineHandler)
+    }
+  }
+
+  private unregisterLifecycleHandlers() {
+    if (this.visibilityHandler) {
+      document.removeEventListener('visibilitychange', this.visibilityHandler)
+      this.visibilityHandler = null
+    }
+    if (this.onlineHandler) {
+      window.removeEventListener('online', this.onlineHandler)
+      this.onlineHandler = null
+    }
+  }
+
+  onConnectionChange(callback: (connected: boolean) => void) {
+    this.connectionCallbacks.push(callback)
+    return () => {
+      const index = this.connectionCallbacks.indexOf(callback)
+      if (index > -1) {
+        this.connectionCallbacks.splice(index, 1)
+      }
+    }
+  }
+
+  private onAuthenticated() {
+    const isReconnection = this.hasConnectedBefore
+    this.hasConnectedBefore = true
+    this.reconnectAttempts = 0
+    this.setConnected(true)
+    this.startPing()
+
+    if (this.pendingContactId !== undefined) {
+      const contactId = this.pendingContactId
+      this.pendingContactId = undefined
+      this.setCurrentContact(contactId)
+    }
+
+    if (isReconnection) {
+      this.refreshStaleData()
+    }
   }
 
   private handleMessage(data: string) {
@@ -178,6 +268,9 @@ class WebSocketService {
       const store = useContactsStore()
 
       switch (message.type) {
+        case WS_TYPE_AUTH_OK:
+          this.onAuthenticated()
+          break
         case WS_TYPE_NEW_MESSAGE:
           this.handleNewMessage(store, message.payload)
           break
@@ -337,7 +430,9 @@ class WebSocketService {
   }
 
   private handleStatusUpdate(store: ReturnType<typeof useContactsStore>, payload: any) {
-    store.updateMessageStatus(payload.message_id, payload.status, payload.error_message)
+    const messageId = payload.message_id != null ? String(payload.message_id) : ''
+    if (!messageId) return
+    store.updateMessageStatus(messageId, payload.status, payload.error_message)
   }
 
   private handleReactionUpdate(store: ReturnType<typeof useContactsStore>, payload: any) {
@@ -533,20 +628,27 @@ class WebSocketService {
     }
   }
 
-  private handleReconnect() {
+  private scheduleReconnect() {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       return
     }
-
     this.reconnectAttempts++
-    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1)
+    const delay = Math.min(
+      this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
+      30000
+    )
+    setTimeout(() => this.connect(), delay)
+  }
 
-    setTimeout(() => {
-      this.connect()
-    }, delay)
+  private handleReconnect() {
+    this.scheduleReconnect()
   }
 
   setCurrentContact(contactId: string | null) {
+    if (!this.isAuthenticated) {
+      this.pendingContactId = contactId
+      return
+    }
     this.send({
       type: WS_TYPE_SET_CONTACT,
       payload: { contact_id: contactId || '' }
@@ -590,7 +692,7 @@ class WebSocketService {
   }
 
   getIsConnected() {
-    return this.isConnected
+    return this.isConnected && this.isAuthenticated && this.ws?.readyState === WebSocket.OPEN
   }
 }
 

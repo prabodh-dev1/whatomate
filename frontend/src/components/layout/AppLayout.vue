@@ -37,7 +37,8 @@ onMounted(() => {
     wsService.connect(async () => {
       try {
         const resp = await authService.getWSToken()
-        return resp.data.data.token
+        const data = resp.data.data ?? resp.data
+        return data?.token ?? null
       } catch {
         return null
       }

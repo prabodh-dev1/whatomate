@@ -172,6 +172,8 @@ const AUTO_RESOLVED_CONTEXT_TOKENS = new Set(['contact_name', 'phone_number', 'u
 const stickyDate = ref('')
 const showStickyDate = ref(false)
 let stickyDateTimeout: ReturnType<typeof setTimeout> | null = null
+let chatPollInterval: ReturnType<typeof setInterval> | null = null
+let unsubscribeWsConnection: (() => void) | null = null
 
 // Emoji picker state
 const emojiPickerOpen = ref(false)
@@ -467,10 +469,39 @@ onMounted(async () => {
   // See issue #280.
   document.addEventListener('visibilitychange', onUserActive)
   window.addEventListener('focus', onUserActive)
+
+  // Fallback when WebSocket is down: poll open chat + contact list for new messages/status
+  unsubscribeWsConnection = wsService.onConnectionChange((connected) => {
+    if (connected) {
+      stopChatPolling()
+    } else if (contactId.value) {
+      startChatPolling()
+    }
+  })
+  if (!wsService.getIsConnected() && contactId.value) {
+    startChatPolling()
+  }
 })
+
+async function refreshOpenChatIfNeeded() {
+  if (!contactId.value) return
+  const id = contactId.value
+  const account = selectedAccount.value || undefined
+  await Promise.all([
+    contactsStore.fetchMessages(id, account ? { account } : undefined),
+    contactsStore.fetchContacts()
+  ])
+}
 
 function onUserActive() {
   if (document.visibilityState !== 'visible' || !document.hasFocus()) return
+
+  // Sync message status ticks when WebSocket is down (e.g. after tab switch)
+  if (!wsService.getIsConnected()) {
+    wsService.connect()
+    refreshOpenChatIfNeeded()
+  }
+
   if (!firstUnreadId.value) return
   if (contactsStore.currentContact) {
     contactsService.markRead(contactsStore.currentContact.id)
@@ -484,7 +515,30 @@ function onUserActive() {
   })
 }
 
+function startChatPolling() {
+  if (chatPollInterval) return
+  chatPollInterval = setInterval(async () => {
+    if (wsService.getIsConnected() || !contactId.value) return
+    const id = contactId.value
+    const account = selectedAccount.value || undefined
+    await Promise.all([
+      contactsStore.fetchMessages(id, account ? { account } : undefined),
+      contactsStore.fetchContacts()
+    ])
+  }, 3000)
+}
+
+function stopChatPolling() {
+  if (chatPollInterval) {
+    clearInterval(chatPollInterval)
+    chatPollInterval = null
+  }
+}
+
 onUnmounted(() => {
+  stopChatPolling()
+  unsubscribeWsConnection?.()
+  unsubscribeWsConnection = null
   wsService.setCurrentContact(null)
   // Clear current contact when leaving chat view so notifications work on other pages
   contactsStore.setCurrentContact(null)

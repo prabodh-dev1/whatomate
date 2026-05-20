@@ -227,6 +227,16 @@ func (c *Client) handleAuthMessage(data []byte) bool {
 
 	c.hub.log.Info("WebSocket client authenticated via message",
 		"user_id", userID, "org_id", orgID)
+
+	// Tell the client auth succeeded so it can start pings and subscribe to events.
+	authOK, err := json.Marshal(WSMessage{Type: TypeAuthOK, Payload: map[string]string{"status": "ok"}})
+	if err == nil {
+		select {
+		case c.send <- authOK:
+		default:
+			c.hub.log.Warn("Client send buffer full after auth", "user_id", userID)
+		}
+	}
 	return true
 }
 
