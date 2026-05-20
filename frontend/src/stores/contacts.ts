@@ -322,7 +322,9 @@ export const useContactsStore = defineStore('contacts', () => {
         status,
         ...(errorMessage ? { error_message: errorMessage } : {})
       }
+      return true
     }
+    return false
   }
 
   function setCurrentContact(contact: Contact | null) {

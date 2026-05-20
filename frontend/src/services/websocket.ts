@@ -432,7 +432,12 @@ class WebSocketService {
   private handleStatusUpdate(store: ReturnType<typeof useContactsStore>, payload: any) {
     const messageId = payload.message_id != null ? String(payload.message_id) : ''
     if (!messageId) return
-    store.updateMessageStatus(messageId, payload.status, payload.error_message)
+    const updated = store.updateMessageStatus(messageId, payload.status, payload.error_message)
+    // If the open chat missed the WS event (race with send / reconnect), resync from API
+    if (!updated && store.currentContact?.id === payload.contact_id) {
+      const account = store.accountFilter || undefined
+      store.fetchMessages(store.currentContact.id, account ? { account } : undefined)
+    }
   }
 
   private handleReactionUpdate(store: ReturnType<typeof useContactsStore>, payload: any) {
