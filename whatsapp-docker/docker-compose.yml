@@ -1,11 +1,13 @@
+# Standalone Whatomate stack (host ports in 7xxx series to avoid devops conflicts).
+# Behind devops nginx: docker compose -f docker-compose.yml -f docker-compose.devops.yml --profile whatomate up -d
 services:
-  # Whatomate app
   app:
     image: shridh0r/whatomate:latest
     container_name: whatomate_app
     restart: unless-stopped
+    profiles: ["whatomate"]
     ports:
-      - "8080:8080"
+      - "127.0.0.1:7080:8080"
     networks:
       - whatomate
     depends_on:
@@ -20,15 +22,15 @@ services:
       - ./config.toml:/app/config.toml:ro
     command: ["server", "-migrate", "-config", "/app/config.toml"]
 
-  # PostgreSQL database
   db:
     image: postgres:17-alpine
     container_name: whatomate_db
     restart: unless-stopped
+    profiles: ["whatomate"]
     networks:
       - whatomate
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:7432:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-whatomate}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-whatomate}
@@ -41,15 +43,15 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
-  # Redis
   redis:
     image: redis:7-alpine
     container_name: whatomate_redis
     restart: unless-stopped
+    profiles: ["whatomate"]
     networks:
       - whatomate
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:7379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s

@@ -227,13 +227,13 @@ func setDefaults(cfg *Config) {
 	}
 	// Default admin credentials (only used during initial setup)
 	if cfg.DefaultAdmin.Email == "" {
-		cfg.DefaultAdmin.Email = "admin@admin.com"
+		cfg.DefaultAdmin.Email = "vikas@prabodh.in"
 	}
 	if cfg.DefaultAdmin.Password == "" {
-		cfg.DefaultAdmin.Password = "admin"
+		cfg.DefaultAdmin.Password = "changeITnow"
 	}
 	if cfg.DefaultAdmin.FullName == "" {
-		cfg.DefaultAdmin.FullName = "Admin"
+		cfg.DefaultAdmin.FullName = "Vikas"
 	}
 	// Cookie defaults
 	if cfg.App.Environment == "production" {

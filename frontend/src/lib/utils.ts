@@ -84,3 +84,8 @@ export function formatLabel(key: string): string {
     .replace(/([a-z])([A-Z])/g, '$1 $2')
     .replace(/\b\w/g, c => c.toUpperCase())
 }
+
+/** Format amounts in Indian Rupees (₹) for UI display. */
+export function formatCurrency(value: number, currency = 'INR'): string {
+  return new Intl.NumberFormat('en-IN', { style: 'currency', currency }).format(value)
+}

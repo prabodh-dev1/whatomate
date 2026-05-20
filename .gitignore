@@ -59,4 +59,5 @@ audio/
 test-results/
 
 # Docker 
-docker/.env
+whatsapp-docker/.env
+whatsapp-docker/config.toml

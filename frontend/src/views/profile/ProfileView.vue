@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -11,10 +12,18 @@ import { User, Eye, EyeOff, Loader2 } from 'lucide-vue-next'
 import { usersService } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 import { PageHeader } from '@/components/shared'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { getErrorMessage } from '@/lib/api-utils'
 
 const { t } = useI18n()
+const route = useRoute()
+const router = useRouter()
 const authStore = useAuthStore()
+
+const showMustChangePassword = computed(
+  () =>
+    authStore.mustChangePassword || route.query.changePassword === 'required'
+)
 const isChangingPassword = ref(false)
 const showCurrentPassword = ref(false)
 const showNewPassword = ref(false)
@@ -46,11 +55,14 @@ async function changePassword() {
       new_password: passwordForm.value.new_password
     })
     toast.success(t('profile.passwordChanged'))
-    // Clear the form
+    await authStore.refreshUserData()
     passwordForm.value = {
       current_password: '',
       new_password: '',
       confirm_password: ''
+    }
+    if (!authStore.mustChangePassword) {
+      router.replace({ name: 'dashboard' })
     }
   } catch (error: any) {
     toast.error(getErrorMessage(error, t('profile.passwordChangeFailed')))
@@ -72,6 +84,11 @@ async function changePassword() {
     <!-- Content -->
     <ScrollArea class="flex-1">
       <div class="p-6 space-y-6 max-w-2xl mx-auto">
+        <Alert v-if="showMustChangePassword" variant="destructive">
+          <AlertTitle>{{ $t('profile.mustChangePasswordTitle') }}</AlertTitle>
+          <AlertDescription>{{ $t('profile.mustChangePasswordDesc') }}</AlertDescription>
+        </Alert>
+
         <!-- User Info -->
         <Card>
           <CardHeader>

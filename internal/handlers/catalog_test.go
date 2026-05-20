@@ -127,7 +127,7 @@ func createTestCatalogProduct(t *testing.T, app *handlers.App, orgID, catalogID 
 		Name:           name,
 		Description:    "Test product description",
 		Price:          price,
-		Currency:       "USD",
+		Currency:       "INR",
 		URL:            "https://example.com/product",
 		ImageURL:       "https://example.com/image.jpg",
 		RetailerID:     "SKU-" + uuid.New().String()[:8],
@@ -457,7 +457,7 @@ func TestApp_GetCatalog_Success(t *testing.T) {
 	assert.Equal(t, product.ID, resp.Data.Products[0].ID)
 	assert.Equal(t, "Test Product", resp.Data.Products[0].Name)
 	assert.Equal(t, int64(1500), resp.Data.Products[0].Price)
-	assert.Equal(t, "USD", resp.Data.Products[0].Currency)
+	assert.Equal(t, "INR", resp.Data.Products[0].Currency)
 }
 
 func TestApp_GetCatalog_NotFound(t *testing.T) {
@@ -813,7 +813,7 @@ func TestApp_CreateCatalogProduct_DefaultCurrency(t *testing.T) {
 	}
 	err = json.Unmarshal(testutil.GetResponseBody(req), &resp)
 	require.NoError(t, err)
-	assert.Equal(t, "USD", resp.Data.Currency)
+	assert.Equal(t, "INR", resp.Data.Currency)
 }
 
 func TestApp_CreateCatalogProduct_MissingFields(t *testing.T) {
@@ -919,7 +919,7 @@ func TestApp_GetCatalogProduct_Success(t *testing.T) {
 	assert.Equal(t, product.ID, resp.Data.ID)
 	assert.Equal(t, "Test Product", resp.Data.Name)
 	assert.Equal(t, int64(3000), resp.Data.Price)
-	assert.Equal(t, "USD", resp.Data.Currency)
+	assert.Equal(t, "INR", resp.Data.Currency)
 	assert.Equal(t, product.RetailerID, resp.Data.RetailerID)
 	assert.True(t, resp.Data.IsActive)
 	assert.NotEmpty(t, resp.Data.CreatedAt)

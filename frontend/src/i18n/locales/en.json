@@ -138,6 +138,7 @@
     "username": "Username",
     "rememberMe": "Remember me",
     "loginSuccess": "Login successful",
+    "mustChangePassword": "Please set a new password before continuing.",
     "logoutSuccess": "Successfully logged out",
     "invalidCredentials": "Invalid credentials",
     "sessionExpired": "Your session has expired. Please login again.",
@@ -1256,7 +1257,9 @@
     "passwordMismatch": "New passwords do not match",
     "passwordTooShort": "New password must be at least 6 characters",
     "passwordChanged": "Password changed successfully",
-    "passwordChangeFailed": "Failed to change password"
+    "passwordChangeFailed": "Failed to change password",
+    "mustChangePasswordTitle": "Change your password",
+    "mustChangePasswordDesc": "You are using the initial admin password. Choose a new password below before using Whatomate."
   },
   "accounts": {
     "title": "WhatsApp Accounts",

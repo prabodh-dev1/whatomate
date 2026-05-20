@@ -63,9 +63,9 @@ The latest image is available on Docker Hub at [`shridh0r/whatomate:latest`](htt
 
 ```bash
 # Download compose file, sample config, and env file
-curl -LO https://raw.githubusercontent.com/shridarpatil/whatomate/main/docker/docker-compose.yml
-curl -LO https://raw.githubusercontent.com/shridarpatil/whatomate/main/config.example.toml
-curl -L https://raw.githubusercontent.com/shridarpatil/whatomate/main/docker/.env.example -o .env
+curl -LO https://raw.githubusercontent.com/prabodh-dev1/whatomate/main/whatsapp-docker/docker-compose.yml
+curl -LO https://raw.githubusercontent.com/prabodh-dev1/whatomate/main/config.example.toml
+curl -L https://raw.githubusercontent.com/prabodh-dev1/whatomate/main/whatsapp-docker/.env.example -o .env
 
 # Copy and edit config
 cp config.example.toml config.toml
@@ -75,7 +75,7 @@ cp config.example.toml config.toml
 docker compose up -d
 ```
 
-Go to `http://localhost:8080` and login with `admin@admin.com` / `admin`
+Go to `http://localhost:7080` and login with `vikas@prabodh.in` / `changeITnow` (you will be prompted to change the password)
 
 __________________
 
@@ -91,7 +91,7 @@ cp config.example.toml config.toml
 ./whatomate server -migrate
 ```
 
-Go to `http://localhost:8080` and login with `admin@admin.com` / `admin`
+Go to `http://localhost:7080` and login with `vikas@prabodh.in` / `changeITnow` (you will be prompted to change the password)
 
 __________________
 

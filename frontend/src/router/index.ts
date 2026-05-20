@@ -410,6 +410,11 @@ router.beforeEach(async (to, _from, next) => {
       }
     }
 
+    // Force password change before using the app
+    if (authStore.mustChangePassword && to.name !== 'profile') {
+      return next({ name: 'profile', query: { changePassword: 'required' } })
+    }
+
     // Check permission-based access
     const requiredPermission = to.meta.permission
     if (requiredPermission) {
@@ -421,6 +426,9 @@ router.beforeEach(async (to, _from, next) => {
   } else {
     // Redirect to appropriate page if already logged in
     if (authStore.isAuthenticated && (to.name === 'login' || to.name === 'register')) {
+      if (authStore.mustChangePassword) {
+        return next({ name: 'profile', query: { changePassword: 'required' } })
+      }
       return next({ path: getFirstAccessibleRoute(authStore) })
     }
   }

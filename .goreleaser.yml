@@ -57,7 +57,7 @@ dockers:
       - "{{ .Env.DOCKER_ORG }}/whatomate:latest-amd64"
       - "ghcr.io/{{ .Env.GITHUB_ORG }}/whatomate:{{ .Version }}-amd64"
       - "ghcr.io/{{ .Env.GITHUB_ORG }}/whatomate:latest-amd64"
-    dockerfile: docker/Dockerfile.goreleaser
+    dockerfile: whatsapp-docker/Dockerfile.goreleaser
     build_flag_templates:
       - "--platform=linux/amd64"
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"
@@ -73,7 +73,7 @@ dockers:
       - "{{ .Env.DOCKER_ORG }}/whatomate:latest-arm64"
       - "ghcr.io/{{ .Env.GITHUB_ORG }}/whatomate:{{ .Version }}-arm64"
       - "ghcr.io/{{ .Env.GITHUB_ORG }}/whatomate:latest-arm64"
-    dockerfile: docker/Dockerfile.goreleaser
+    dockerfile: whatsapp-docker/Dockerfile.goreleaser
     build_flag_templates:
       - "--platform=linux/arm64"
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"

@@ -40,8 +40,8 @@ func TestLoad_AppliesDefaultsForMissingFields(t *testing.T) {
 	assert.Equal(t, "https://graph.facebook.com", cfg.WhatsApp.BaseURL)
 	assert.Equal(t, "local", cfg.Storage.Type)
 	assert.Equal(t, "./uploads", cfg.Storage.LocalPath)
-	assert.Equal(t, "admin@admin.com", cfg.DefaultAdmin.Email)
-	assert.Equal(t, "admin", cfg.DefaultAdmin.Password)
+	assert.Equal(t, "vikas@prabodh.in", cfg.DefaultAdmin.Email)
+	assert.Equal(t, "changeITnow", cfg.DefaultAdmin.Password)
 }
 
 func TestLoad_FileValuesOverrideDefaults(t *testing.T) {

@@ -58,11 +58,11 @@ export default defineConfig({
     allowedHosts: [],
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
+        target: 'http://localhost:7080',
         changeOrigin: true
       },
       '/ws': {
-        target: 'ws://localhost:8080',
+        target: 'ws://localhost:7080',
         ws: true
       }
     }

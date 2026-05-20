@@ -242,7 +242,7 @@ const recipientPlaceholder = computed(() => {
     if (p.toLowerCase().includes('name')) return 'John Doe'
     if (p.toLowerCase().includes('order')) return 'ORD-123'
     if (p.toLowerCase().includes('date')) return '2024-01-15'
-    if (p.toLowerCase().includes('amount') || p.toLowerCase().includes('price')) return '99.99'
+    if (p.toLowerCase().includes('amount') || p.toLowerCase().includes('price')) return '₹99.99'
     return `${p}_value`
   })
   return `+1234567890, John Doe, ${exampleValues.join(', ')}\n+0987654321, Jane Smith, ${exampleValues.join(', ')}`

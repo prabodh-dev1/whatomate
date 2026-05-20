@@ -1,0 +1,23 @@
+# Overlay for Prabodh devops: attach Whatomate to prabodh_net so nginx can reach app:8080.
+# From repo root:
+#   docker compose -f whatomate/whatsapp-docker/docker-compose.yml \
+#     -f whatomate/whatsapp-docker/docker-compose.devops.yml --profile whatomate up -d
+# Or use the include + service overrides in the root docker-compose.yaml.
+services:
+  app:
+    networks:
+      - whatomate
+      - mynet
+  db:
+    networks:
+      - whatomate
+      - mynet
+  redis:
+    networks:
+      - whatomate
+      - mynet
+
+networks:
+  mynet:
+    external: true
+    name: prabodh_net

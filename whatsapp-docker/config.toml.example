@@ -1,0 +1,67 @@
+# Production-oriented config for https://crm.prabodh.in (copy to config.toml).
+# Internal container ports stay 8080 / 5432 / 6379; host publishes 7080 / 7432 / 7379.
+#
+#   cp config.toml.example config.toml
+#   cp .env.example .env   # set POSTGRES_PASSWORD, TZ, etc.
+
+[app]
+name = "Whatomate"
+environment = "production"
+debug = false
+encryption_key = "CHANGE_ME_32_CHAR_MINIMUM_SECRET_KEY!!"
+
+[server]
+host = "0.0.0.0"
+port = 8080
+read_timeout = 30
+write_timeout = 30
+base_path = ""
+allowed_origins = "https://crm.prabodh.in"
+
+[database]
+host = "db"
+port = 5432
+user = "whatomate"
+password = "whatomate"
+name = "whatomate"
+ssl_mode = "disable"
+max_open_conns = 25
+max_idle_conns = 5
+conn_max_lifetime = 300
+
+[redis]
+host = "redis"
+port = 6379
+username = ""
+password = ""
+db = 0
+tls = false
+
+[jwt]
+secret = "CHANGE_ME_32_CHAR_MINIMUM_JWT_SECRET_KEY!!"
+access_expiry_mins = 15
+refresh_expiry_days = 1
+
+[storage]
+type = "local"
+local_path = "./uploads"
+
+[cookie]
+domain = ".prabodh.in"
+secure = true
+
+[rate_limit]
+enabled = true
+trust_proxy = true
+login_max_attempts = 10
+register_max_attempts = 10
+refresh_max_attempts = 30
+sso_max_attempts = 10
+window_seconds = 60
+api_max_requests = 200
+api_window_seconds = 60
+
+[default_admin]
+email = "vikas@prabodh.in"
+password = "changeITnow"
+full_name = "Vikas"

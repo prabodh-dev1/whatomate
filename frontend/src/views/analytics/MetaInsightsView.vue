@@ -30,6 +30,7 @@ import {
   type MetaCallDataPoint
 } from '@/services/api'
 import { PageHeader, ErrorState, DateRangePicker } from '@/components/shared'
+import { formatCurrency } from '@/lib/utils'
 import {
   Command,
   CommandEmpty,
@@ -44,7 +45,7 @@ import {
   Check,
   MessageSquare,
   MessagesSquare,
-  DollarSign,
+  IndianRupee,
   FileText,
   Phone,
   PhoneIncoming,
@@ -603,10 +604,6 @@ function formatCategory(category: string): string {
   return category.charAt(0) + category.slice(1).toLowerCase().replace(/_/g, ' ')
 }
 
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value)
-}
-
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}s`
   const mins = Math.floor(seconds / 60)
@@ -735,7 +732,7 @@ const chartOptions = {
               <span class="hidden lg:inline">{{ $t('metaInsights.messaging') }}</span>
             </TabsTrigger>
             <TabsTrigger value="pricing_analytics">
-              <DollarSign class="h-4 w-4 lg:mr-2" />
+              <IndianRupee class="h-4 w-4 lg:mr-2" />
               <span class="hidden lg:inline">{{ $t('metaInsights.pricing') }}</span>
             </TabsTrigger>
             <TabsTrigger value="template_analytics">
@@ -854,7 +851,7 @@ const chartOptions = {
                   <div class="flex flex-row items-center justify-between space-y-0 pb-2">
                     <span class="text-sm font-medium text-white/50 light:text-gray-500">{{ $t('metaInsights.totalCost') }}</span>
                     <div class="h-10 w-10 rounded-lg bg-emerald-500/20 flex items-center justify-center">
-                      <DollarSign class="h-5 w-5 text-emerald-400" />
+                      <IndianRupee class="h-5 w-5 text-emerald-400" />
                     </div>
                   </div>
                   <div class="pt-2">
@@ -1064,7 +1061,7 @@ const chartOptions = {
                   <div class="flex flex-row items-center justify-between space-y-0 pb-2">
                     <span class="text-sm font-medium text-white/50 light:text-gray-500">{{ $t('metaInsights.totalCost') }}</span>
                     <div class="h-10 w-10 rounded-lg bg-rose-500/20 flex items-center justify-center">
-                      <DollarSign class="h-5 w-5 text-rose-400" />
+                      <IndianRupee class="h-5 w-5 text-rose-400" />
                     </div>
                   </div>
                   <div class="pt-2">
@@ -1216,12 +1213,12 @@ const chartOptions = {
                   <div class="flex flex-row items-center justify-between space-y-0 pb-2">
                     <span class="text-sm font-medium text-white/50 light:text-gray-500">{{ $t('metaInsights.totalCost') }}</span>
                     <div class="h-10 w-10 rounded-lg bg-amber-500/20 flex items-center justify-center">
-                      <DollarSign class="h-5 w-5 text-amber-400" />
+                      <IndianRupee class="h-5 w-5 text-amber-400" />
                     </div>
                   </div>
                   <div class="pt-2">
                     <div class="text-3xl font-bold text-white light:text-gray-900">
-                      ${{ (aggregatedData as ReturnType<typeof aggregateCallData>).totals.cost.toFixed(2) }}
+                      {{ formatCurrency((aggregatedData as ReturnType<typeof aggregateCallData>).totals.cost) }}
                     </div>
                   </div>
                 </div>

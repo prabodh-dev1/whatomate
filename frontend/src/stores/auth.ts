@@ -6,6 +6,7 @@ export interface UserSettings {
   email_notifications?: boolean
   new_message_alerts?: boolean
   campaign_updates?: boolean
+  must_change_password?: boolean
 }
 
 export interface Permission {
@@ -49,6 +50,9 @@ export const useAuthStore = defineStore('auth', () => {
   const organizationId = computed(() => user.value?.organization_id || '')
   const userSettings = computed(() => user.value?.settings || {})
   const isAvailable = computed(() => user.value?.is_available ?? true)
+  const mustChangePassword = computed(
+    () => user.value?.settings?.must_change_password === true
+  )
 
   function setAuth(authData: { user: User }) {
     user.value = authData.user
@@ -190,6 +194,7 @@ export const useAuthStore = defineStore('auth', () => {
     organizationId,
     userSettings,
     isAvailable,
+    mustChangePassword,
     setAuth,
     clearAuth,
     restoreSession,

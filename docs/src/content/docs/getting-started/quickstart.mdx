@@ -15,24 +15,24 @@ The fastest way to get started:
 # Clone the repository
 git clone https://github.com/shridarpatil/whatomate.git
 cd whatomate
-cp config.example.toml docker/config.toml
-cp docker/.env.example docker/.env  # Edit to set PostgreSQL credentials and timezone
+cp config.example.toml whatsapp-docker/config.toml
+cp whatsapp-docker/.env.example whatsapp-docker/.env  # Edit to set PostgreSQL credentials and timezone
 
 # Start all services (PostgreSQL, Redis, Server)
 make docker-up
 
 # Access the application
-open http://localhost:8080
+open http://localhost:7080
 ```
 
 <Aside type="note">
-  The `.env` file is required by Docker Compose. It sets PostgreSQL credentials (`POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`) and the server timezone (`TZ`). Copy `docker/.env.example` to `docker/.env` and edit as needed.
+  The `.env` file is required by Docker Compose. It sets PostgreSQL credentials (`POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`) and the server timezone (`TZ`). Copy `whatsapp-docker/.env.example` to `whatsapp-docker/.env` and edit as needed. Default published ports are **7080** (app), **7432** (PostgreSQL), and **7379** (Redis) on the host.
 </Aside>
 
-**Default login:** `admin@admin.com` / `admin`
+**Default login:** `vikas@prabodh.in` / `changeITnow`
 
 <Aside type="caution">
-  Change the admin password immediately after first login.
+  You must change the default password on first login (Profile page) before using the app.
 </Aside>
 
 ## Manual Installation
@@ -124,12 +124,12 @@ npm run dev
 | Service | URL |
 |---------|-----|
 | Frontend | http://localhost:3000 |
-| API | http://localhost:8080 |
+| API | http://localhost:7080 |
 
-**Login:** `admin@admin.com` / `admin`
+**Login:** `vikas@prabodh.in` / `changeITnow`
 
 <Aside type="caution">
-  Change the admin password immediately after first login via the Profile page.
+  Change the default password on first login via the Profile page before continuing.
 </Aside>
 
 ## Production Build
@@ -141,7 +141,7 @@ make build-prod
 ./whatomate server -migrate
 ```
 
-This creates a self-contained binary—no separate frontend server needed. Access at http://localhost:8080.
+This creates a self-contained binary—no separate frontend server needed. Access at http://localhost:7080 when using the default Docker port mapping.
 
 ## 3rd Party Hosting
 
@@ -160,7 +160,7 @@ Template to start with a production ready instance!
 | `database does not exist` | Create it: `createdb whatomate` |
 | `permission denied` | Check database user/password in `config.toml` |
 | `port already in use` | Change port in `config.toml` or stop conflicting service |
-| Frontend can't reach API | Ensure backend is running on port 8080 |
+| Frontend can't reach API | Ensure backend is reachable (Docker: port **7080** on host; container listens on 8080) |
 
 ## WhatsApp Configuration
 

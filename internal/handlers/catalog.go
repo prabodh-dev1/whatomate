@@ -350,7 +350,7 @@ func (a *App) CreateCatalogProduct(r *fastglue.Request) error {
 
 	// Set defaults
 	if req.Currency == "" {
-		req.Currency = "USD"
+		req.Currency = "INR"
 	}
 
 	// Create product in Meta

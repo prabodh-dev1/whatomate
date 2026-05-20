@@ -798,6 +798,10 @@ func (a *App) ChangePassword(r *fastglue.Request) error {
 	}
 
 	user.PasswordHash = string(hashedPassword)
+	if user.Settings == nil {
+		user.Settings = models.JSONB{}
+	}
+	delete(user.Settings, "must_change_password")
 	if err := a.DB.Save(&user).Error; err != nil {
 		a.Log.Error("Failed to update password", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, "Failed to change password", nil, "")

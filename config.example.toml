@@ -1,8 +1,9 @@
 # Whatomate Configuration
 # Copy this to config.toml and update values
 #
-# For Docker: use "db" and "redis" as hostnames
-# For local dev: use "localhost"
+# For Docker Compose (whatsapp-docker): use "db" and "redis" as hostnames.
+# Container ports stay 5432/6379/8080; default host publishes 7432/7379/7080.
+# For local dev without Docker: use "localhost" with those host ports.
 
 [app]
 name = "Whatomate"
@@ -113,8 +114,9 @@ udp_port_max = 10100          # WebRTC UDP port range end
 # username = "user"
 # credential = "password"
 
-# Default admin credentials (only used during initial setup when no users exist)
+# Default admin credentials (only used during initial setup when no users exist).
+# First login requires changing this password (Profile page).
 [default_admin]
-email = "admin@admin.com"
-password = "admin"
-full_name = "Admin"
+email = "vikas@prabodh.in"
+password = "changeITnow"
+full_name = "Vikas"

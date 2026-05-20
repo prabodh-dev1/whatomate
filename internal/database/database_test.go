@@ -189,6 +189,7 @@ func TestCreateDefaultAdmin_CreatesOrgAndUser(t *testing.T) {
 	assert.True(t, user.IsActive)
 	assert.True(t, user.IsSuperAdmin)
 	assert.NotEmpty(t, user.PasswordHash)
+	assert.Equal(t, true, user.Settings["must_change_password"])
 
 	// Verify an organization was created
 	var org models.Organization

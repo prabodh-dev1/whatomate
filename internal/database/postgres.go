@@ -182,7 +182,7 @@ func RunMigrationWithProgress(db *gorm.DB, adminCfg *config.DefaultAdminConfig) 
 	}
 
 	// Fix existing organizations - link permissions to system roles if missing
-	if err := SeedSystemRolesForAllOrgs(silentDB); err != nil {
+	if err := SeedSystemRolesForAllOrgs(silentDB, adminCfg.Email); err != nil {
 		fmt.Printf("\n  \033[31m✗ Failed to fix existing role permissions\033[0m\n\n")
 		return err
 	}
@@ -354,8 +354,10 @@ func CreateDefaultAdmin(db *gorm.DB, cfg *config.DefaultAdminConfig) error {
 		RoleID:         &adminRole.ID,
 		IsActive:       true,
 		IsAvailable:    true,
-		IsSuperAdmin:   true,
-		Settings:       models.JSONB{},
+		IsSuperAdmin: true,
+		Settings: models.JSONB{
+			"must_change_password": true,
+		},
 	}
 	if err := db.Create(&admin).Error; err != nil {
 		return fmt.Errorf("failed to create default admin user: %w", err)
@@ -425,7 +427,7 @@ func SeedPermissionsAndRoles(db *gorm.DB) error {
 
 // SeedSystemRolesForAllOrgs creates system roles for all existing organizations
 // This is idempotent - it skips organizations that already have system roles
-func SeedSystemRolesForAllOrgs(db *gorm.DB) error {
+func SeedSystemRolesForAllOrgs(db *gorm.DB, defaultAdminEmail string) error {
 	var orgs []models.Organization
 	if err := db.Find(&orgs).Error; err != nil {
 		return fmt.Errorf("failed to fetch organizations: %w", err)
@@ -447,9 +449,11 @@ func SeedSystemRolesForAllOrgs(db *gorm.DB) error {
 		return fmt.Errorf("failed to migrate user roles: %w", err)
 	}
 
-	// Make admin@admin.com a super admin if exists
-	if err := db.Exec("UPDATE users SET is_super_admin = true WHERE email = 'admin@admin.com'").Error; err != nil {
-		return fmt.Errorf("failed to set super admin: %w", err)
+	// Ensure configured default admin is super admin (existing installs)
+	if defaultAdminEmail != "" {
+		if err := db.Exec("UPDATE users SET is_super_admin = true WHERE email = ?", defaultAdminEmail).Error; err != nil {
+			return fmt.Errorf("failed to set super admin: %w", err)
+		}
 	}
 
 	return nil
@@ -657,9 +661,8 @@ func SeedSystemRolesForOrg(db *gorm.DB, orgID uuid.UUID) error {
 
 // SeedDefaultWidgets creates default dashboard widgets for all organizations
 func SeedDefaultWidgets(db *gorm.DB) error {
-	// Find the super admin user (admin@admin.com)
 	var superAdmin models.User
-	if err := db.Where("email = ?", "admin@admin.com").First(&superAdmin).Error; err != nil {
+	if err := db.Where("is_super_admin = ?", true).First(&superAdmin).Error; err != nil {
 		// No super admin exists yet, skip widget creation
 		return nil
 	}

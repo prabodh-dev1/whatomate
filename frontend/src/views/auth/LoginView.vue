@@ -73,8 +73,14 @@ const handleLogin = async () => {
 
   try {
     await authStore.login(email.value, password.value)
-    toast.success(t('auth.loginSuccess'))
 
+    if (authStore.mustChangePassword) {
+      toast.warning(t('auth.mustChangePassword'))
+      router.push({ name: 'profile', query: { changePassword: 'required' } })
+      return
+    }
+
+    toast.success(t('auth.loginSuccess'))
     const redirect = route.query.redirect as string
     router.push(redirect || '/')
   } catch (error: any) {

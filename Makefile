@@ -13,7 +13,7 @@ BUILD_TIME=$(shell date -u '+%Y-%m-%d_%H:%M:%S')
 LDFLAGS=-ldflags "-s -w -X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME)"
 
 # Docker parameters
-DOCKER_COMPOSE=docker compose -f docker/docker-compose.yml
+DOCKER_COMPOSE=docker compose -f whatsapp-docker/docker-compose.yml
 
 all: build
 

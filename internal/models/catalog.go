@@ -29,7 +29,7 @@ type CatalogProduct struct {
 	Name           string    `gorm:"size:255;not null" json:"name"`
 	Description    string    `gorm:"type:text" json:"description"`
 	Price          int64     `gorm:"not null" json:"price"` // Price in cents
-	Currency       string    `gorm:"size:3;default:'USD'" json:"currency"`
+	Currency       string    `gorm:"size:3;default:'INR'" json:"currency"`
 	URL            string    `gorm:"size:500" json:"url"`
 	ImageURL       string    `gorm:"size:500" json:"image_url"`
 	RetailerID     string    `gorm:"size:100" json:"retailer_id"` // SKU
