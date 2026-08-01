@@ -12,6 +12,7 @@ import { useTagsStore } from '@/stores/tags'
 import { TagBadge } from '@/components/ui/tag-badge'
 import { getTagColorClass } from '@/lib/constants'
 import { getErrorMessage } from '@/lib/api-utils'
+import { compressImage } from '@/lib/imageCompression'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -95,6 +96,7 @@ import { useInfiniteScroll } from '@/composables/useInfiniteScroll'
 import CannedResponsePicker from '@/components/chat/CannedResponsePicker.vue'
 import PreviewButtonGroup from '@/components/chatbot/flow-preview/PreviewButtonGroup.vue'
 import TemplatePicker from '@/components/chat/TemplatePicker.vue'
+import MediaViewerDialog from '@/components/chat/MediaViewerDialog.vue'
 import ContactInfoPanel from '@/components/chat/ContactInfoPanel.vue'
 import ConversationNotes from '@/components/chat/ConversationNotes.vue'
 import CallButton from '@/components/calling/CallButton.vue'
@@ -149,6 +151,10 @@ const isMediaDialogOpen = ref(false)
 const mediaCaption = ref('')
 const isUploadingMedia = ref(false)
 
+// In-app media viewer (lightbox) state — see MediaViewerDialog.vue
+const mediaViewerOpen = ref(false)
+const mediaViewerIndex = ref(0)
+
 // Cache for media blob URLs (message_id -> blob URL)
 
 
@@ -182,6 +188,11 @@ const templateDialogOpen = ref(false)
 const selectedTemplate = ref<any>(null)
 const templateParamNames = ref<string[]>([])
 const templateParamValues = ref<Record<string, string>>({})
+// Name of the TEXT-header variable (max 1 per Meta) and its value. Kept in
+// its own ref so a positional {{1}} in the header doesn't collide with a
+// {{1}} body parameter — both can be filled independently.
+const templateHeaderParamName = ref<string | null>(null)
+const templateHeaderParamValue = ref('')
 const templateButtonUrlParams = ref<{ index: number; text: string; value: string; type: string }[]>([])
 const isSendingTemplate = ref(false)
 const templateHeaderType = computed(() => selectedTemplate.value?.header_type)
@@ -903,18 +914,32 @@ async function sendCannedResponse() {
   // combos aren't representable; the detail-page validator blocks save for
   // those, so the text fallback here is just a safety net.
   const voiceCallButtons = buttons.filter(b => b.type === 'voice_call')
+  const flowButtons = buttons.filter(b => b.type === 'flow')
   let sendType: 'text' | 'interactive' = 'text'
   let interactive: {
-    type: 'button' | 'list' | 'cta_url' | 'voice_call'
+    type: 'button' | 'list' | 'cta_url' | 'voice_call' | 'flow'
     body: string
     buttons?: Array<{ id: string; title: string }>
     button_text?: string
     url?: string
     display_text?: string
     ttl_minutes?: number
+    flow_id?: string
+    first_screen?: string
   } | undefined
 
-  if (buttons.length === 1 && voiceCallButtons.length === 1) {
+  if (buttons.length === 1 && flowButtons.length === 1) {
+    const f = flowButtons[0]
+    sendType = 'interactive'
+    interactive = {
+      type: 'flow',
+      body,
+      // The button title is the CTA label shown to the customer.
+      button_text: resolveCannedTokens(f.title),
+      flow_id: f.flow_id,
+      first_screen: f.screen,
+    }
+  } else if (buttons.length === 1 && voiceCallButtons.length === 1) {
     const vc = voiceCallButtons[0]
     sendType = 'interactive'
     interactive = {
@@ -995,6 +1020,14 @@ const templatePreview = computed(() => {
   })
 })
 
+// Show the header input only when the user has to fill it. Context-token
+// names (contact_name, phone_number, …) auto-resolve and stay hidden — same
+// rule body params follow via templateParamNames filtering.
+const showHeaderParamInput = computed(() =>
+  !!templateHeaderParamName.value &&
+  !AUTO_RESOLVED_CONTEXT_TOKENS.has(templateHeaderParamName.value)
+)
+
 function extractButtonUrlParams(buttons: any[]): { index: number; text: string; value: string; type: string }[] {
   if (!buttons?.length) return []
   return buttons
@@ -1012,10 +1045,10 @@ function extractButtonUrlParams(buttons: any[]): { index: number; text: string; 
 
 function handleTemplateWithParams(template: any, paramNames: string[]) {
   selectedTemplate.value = template
-  // Pre-fill context tokens from the conversation; keep them in the payload
-  // dict so the backend forwards them to Meta, but hide them from the dialog
-  // so the agent doesn't have to type values we already know — same pattern
-  // as canned responses (see handleCannedSelect).
+  // Pre-fill body context tokens from the conversation; keep them in the
+  // payload dict so the backend forwards them to Meta, but hide them from
+  // the dialog so the agent doesn't have to type values we already know —
+  // same pattern as canned responses (see handleCannedSelect).
   const initial: Record<string, string> = {}
   for (const name of paramNames) {
     const resolved = resolveContextToken(name)
@@ -1023,6 +1056,22 @@ function handleTemplateWithParams(template: any, paramNames: string[]) {
   }
   templateParamValues.value = initial
   templateParamNames.value = paramNames.filter(n => !AUTO_RESOLVED_CONTEXT_TOKENS.has(n))
+
+  // Identify the TEXT-header variable (max 1) and pre-fill from context.
+  // Context-token names (contact_name / phone_number / agent_name / user_name)
+  // resolve automatically and stay hidden from the dialog — same convention
+  // as body params.
+  templateHeaderParamName.value = null
+  templateHeaderParamValue.value = ''
+  if (template.header_type === 'TEXT' && template.header_content) {
+    const m = template.header_content.match(/\{\{([^}]+)\}\}/)
+    if (m) {
+      const name = m[1].trim()
+      templateHeaderParamName.value = name
+      templateHeaderParamValue.value = resolveContextToken(name) ?? ''
+    }
+  }
+
   clearTemplateHeaderMedia()
   templateButtonUrlParams.value = extractButtonUrlParams(template.buttons)
   templateDialogOpen.value = true
@@ -1030,6 +1079,14 @@ function handleTemplateWithParams(template: any, paramNames: string[]) {
 
 async function sendTemplateMessage() {
   if (!contactsStore.currentContact || !selectedTemplate.value) return
+
+  // Validate header param (separate ref so it can hold its own value even
+  // when the body has a {{1}} that would otherwise collide). Auto-resolved
+  // context tokens are exempt — their value comes from the conversation.
+  if (showHeaderParamInput.value && !templateHeaderParamValue.value.trim()) {
+    toast.error(t('chat.parameterRequired'))
+    return
+  }
 
   // Validate all body params are filled
   const missingBody = templateParamNames.value.some(n => !templateParamValues.value[n]?.trim())
@@ -1057,6 +1114,12 @@ async function sendTemplateMessage() {
       ? Object.fromEntries(templateButtonUrlParams.value.map(b => [String(b.index), b.value]))
       : undefined
 
+  // Header value goes in its own payload field so a positional {{1}} header
+  // doesn't overwrite a positional {{1}} body parameter in the flat map.
+  const headerParams: Record<string, string> | undefined =
+    templateHeaderParamName.value && templateHeaderParamValue.value
+      ? { [templateHeaderParamName.value]: templateHeaderParamValue.value }
+      : undefined
 
   isSendingTemplate.value = true
   try {
@@ -1066,13 +1129,16 @@ async function sendTemplateMessage() {
       templateParamValues.value,
       selectedAccount.value || undefined,
       templateHeaderFile.value || undefined,
-      buttonParams
+      buttonParams,
+      headerParams
     )
     toast.success(t('chat.templateSent'))
     templateDialogOpen.value = false
     selectedTemplate.value = null
     templateParamNames.value = []
     templateParamValues.value = {}
+    templateHeaderParamName.value = null
+    templateHeaderParamValue.value = ''
     clearTemplateHeaderMedia()
     templateButtonUrlParams.value = []
   } catch (error: any) {
@@ -1465,11 +1531,34 @@ function getMediaUrl(message: Message): string {
   return `${basePath}/api/media/${message.id}`
 }
 
+// Every media attachment in the open conversation, in chronological order, that
+// the in-app viewer can show (images, stickers, video, documents/PDF, plus
+// template header media). This is the gallery the lightbox pages through.
+const viewableMedia = computed(() =>
+  contactsStore.messages.filter(
+    m =>
+      !!m.media_url &&
+      (['image', 'sticker', 'video', 'document'].includes(m.message_type) ||
+        m.message_type === 'template'),
+  ),
+)
+
+// Only PDFs gain anything from the lightbox — docx/xlsx/zip have no inline
+// viewer, so routing them through the modal would just add a click before the
+// same download. Those bubbles keep their one-click download link; the viewer
+// still shows them (with a download card) when paging through the gallery.
+function isPreviewableDocument(message: Message): boolean {
+  const mime = message.media_mime_type || ''
+  const name = (message.media_filename || '').toLowerCase()
+  return mime.includes('pdf') || name.endsWith('.pdf')
+}
+
+// Open the in-app viewer at the clicked attachment instead of a new browser tab.
 function openMediaPreview(message: Message) {
-  const url = getMediaUrl(message)
-  if (url) {
-    window.open(url, '_blank')
-  }
+  const idx = viewableMedia.value.findIndex(m => m.id === message.id)
+  if (idx === -1) return
+  mediaViewerIndex.value = idx
+  mediaViewerOpen.value = true
 }
 
 function handleImageError(event: Event) {
@@ -1486,9 +1575,10 @@ function openFilePicker() {
   fileInputRef.value?.click()
 }
 
-function handleFileSelect(event: Event) {
+async function handleFileSelect(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
+  input.value = '' // reset so the same file can be selected again
   if (!file) return
 
   // Validate file type
@@ -1501,29 +1591,39 @@ function handleFileSelect(event: Event) {
     return
   }
 
-  // Validate file size (16MB limit for WhatsApp)
-  const maxSize = 16 * 1024 * 1024
-  if (file.size > maxSize) {
+  // Compress images client-side so they fit the Cloud API's 5 MB image limit
+  // (Meta accepts only jpeg/png for `image` messages). No-op for non-images.
+  let outFile = file
+  if (file.type.startsWith('image/')) {
+    try {
+      outFile = await compressImage(file)
+    } catch {
+      outFile = file
+    }
+  }
+
+  // Per-type size validation: images 5 MB (Meta's limit), other media 14.5 MB
+  // (under the 15 MB fasthttp request body cap).
+  const type = getMediaType(outFile.type)
+  const maxSize = type === 'image' ? 5 * 1024 * 1024 : 14.5 * 1024 * 1024
+  if (outFile.size > maxSize) {
     toast.error(t('chat.fileTooLarge'), {
-      description: t('chat.fileTooLargeDesc')
+      description: type === 'image' ? t('chat.fileTooLargeImage') : t('chat.fileTooLargeMedia')
     })
     return
   }
 
-  selectedFile.value = file
+  selectedFile.value = outFile
   mediaCaption.value = ''
 
   // Create preview URL for images and videos
-  if (file.type.startsWith('image/') || file.type.startsWith('video/')) {
-    filePreviewUrl.value = URL.createObjectURL(file)
+  if (outFile.type.startsWith('image/') || outFile.type.startsWith('video/')) {
+    filePreviewUrl.value = URL.createObjectURL(outFile)
   } else {
     filePreviewUrl.value = null
   }
 
   isMediaDialogOpen.value = true
-
-  // Reset input so same file can be selected again
-  input.value = ''
 }
 
 function closeMediaDialog() {
@@ -2010,6 +2110,15 @@ async function sendMediaMessage() {
                     controls
                     class="max-w-[280px] max-h-[300px] rounded-lg"
                   />
+                  <button
+                    v-else-if="isPreviewableDocument(message)"
+                    type="button"
+                    class="flex items-center gap-2 px-3 py-2 bg-background/50 rounded-lg hover:bg-background/80 transition-colors cursor-pointer text-left w-full"
+                    @click="openMediaPreview(message)"
+                  >
+                    <FileText class="h-5 w-5 text-muted-foreground" />
+                    <span class="text-sm truncate max-w-[200px]">{{ message.media_filename || 'Document' }}</span>
+                  </button>
                   <a
                     v-else
                     :href="getMediaUrl(message)"
@@ -2060,7 +2169,19 @@ async function sendMediaMessage() {
                 </div>
                 <!-- Document message -->
                 <div v-else-if="message.message_type === 'document' && message.media_url" class="mb-2">
+                  <button
+                    v-if="isPreviewableDocument(message)"
+                    type="button"
+                    class="flex items-center gap-2 px-3 py-2 bg-background/50 rounded-lg hover:bg-background/80 transition-colors cursor-pointer text-left w-full"
+                    @click="openMediaPreview(message)"
+                  >
+                    <FileText class="h-5 w-5 text-muted-foreground" />
+                    <span class="text-sm truncate max-w-[200px]">
+                      {{ message.media_filename || 'Document' }}
+                    </span>
+                  </button>
                   <a
+                    v-else
                     :href="getMediaUrl(message)"
                     :download="message.media_filename || 'document'"
                     class="flex items-center gap-2 px-3 py-2 bg-background/50 rounded-lg hover:bg-background/80 transition-colors"
@@ -2120,7 +2241,7 @@ async function sendMediaMessage() {
                 <div v-else-if="message.message_type === 'unsupported'" class="mb-2">
                   <div class="flex items-center gap-2 px-3 py-2 bg-muted/50 rounded-lg text-muted-foreground">
                     <AlertCircle class="h-4 w-4 shrink-0" />
-                    <span class="text-sm italic">This message type is not supported</span>
+                    <span class="text-sm italic">{{ $t('chat.unsupportedMessage') }}</span>
                   </div>
                 </div>
                 <!-- Button reply - WhatsApp style -->
@@ -2455,6 +2576,19 @@ async function sendMediaMessage() {
             @clear="clearTemplateHeaderMedia"
           />
 
+          <div v-if="showHeaderParamInput" class="space-y-1">
+            <label class="text-sm font-medium flex items-center gap-1.5">
+              <span>{{ templateHeaderParamName }}</span>
+              <span class="text-[10px] uppercase tracking-wider text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                {{ $t('chat.headerParamBadge', 'Header') }}
+              </span>
+            </label>
+            <Input
+              v-model="templateHeaderParamValue"
+              :placeholder="templateHeaderParamName ?? ''"
+              class="h-9"
+            />
+          </div>
           <div v-for="param in templateParamNames" :key="param" class="space-y-1">
             <label class="text-sm font-medium">{{ param }}</label>
             <Input
@@ -2685,6 +2819,13 @@ async function sendMediaMessage() {
 
     <!-- Add Contact Dialog -->
     <CreateContactDialog v-model:open="isAddContactOpen" @created="onContactCreated" />
+
+    <!-- In-app media viewer (lightbox) -->
+    <MediaViewerDialog
+      v-model:open="mediaViewerOpen"
+      v-model:index="mediaViewerIndex"
+      :items="viewableMedia"
+    />
   </div>
 </template>
 

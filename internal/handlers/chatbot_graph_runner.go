@@ -107,7 +107,7 @@ func (a *App) runChatGraph(
 	}
 
 	for range maxChatGraphIterations {
-		node := graph.getNode(session.CurrentStep)
+		node := graph.Node(session.CurrentStep)
 		if node == nil {
 			a.Log.Error("chat graph node not found",
 				"session", session.ID, "node_id", session.CurrentStep, "flow", flow.ID)
@@ -124,7 +124,7 @@ func (a *App) runChatGraph(
 					"node", node.ID, "session", session.ID, "expression", expr, "error", err)
 			} else if matched {
 				appendChatPath(session, node, "skipped")
-				next := graph.resolveEdge(node.ID, "default")
+				next := graph.ResolveEdge(node.ID, "default")
 				if next == "" {
 					session.Status = models.SessionStatusCompleted
 					return a.persistChatSession(session)
@@ -172,7 +172,7 @@ func (a *App) runChatGraph(
 			continue
 		}
 
-		next := graph.resolveEdge(node.ID, res.outcome)
+		next := graph.ResolveEdge(node.ID, res.outcome)
 		if next == "" {
 			// No matching edge → terminal.
 			session.Status = models.SessionStatusCompleted
@@ -252,6 +252,20 @@ func (a *App) execChatMessage(node *ChatNode, ctx *chatNodeCtx) (nodeOutcome, er
 func (a *App) execChatButtons(node *ChatNode, ctx *chatNodeCtx) (nodeOutcome, error) {
 	if !ctx.consumed && ctx.buttonID != "" {
 		ctx.consumed = true
+		// Persist the selection when the node configures store_as, mirroring
+		// the prompt node so any node that receives a user response can feed
+		// {{var}} interpolation downstream. Store the visible title (what the
+		// user "said"), falling back to the button id if the title is empty.
+		if storeAs := stringFromConfig(node.Config, "store_as"); storeAs != "" {
+			if ctx.session.SessionData == nil {
+				ctx.session.SessionData = models.JSONB{}
+			}
+			value := ctx.userInput
+			if value == "" {
+				value = ctx.buttonID
+			}
+			ctx.session.SessionData[storeAs] = value
+		}
 		return nodeOutcome{outcome: "button:" + ctx.buttonID}, nil
 	}
 
