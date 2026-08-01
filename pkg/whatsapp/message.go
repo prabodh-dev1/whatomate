@@ -2,12 +2,13 @@ package whatsapp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/shridarpatil/whatomate/internal/templateutil"
 )
 
 // SendTextMessage sends a text message to a recipient with optional reply context
@@ -39,16 +40,10 @@ func (c *Client) SendTextMessage(ctx context.Context, account *Account, rcpt Rec
 		return "", fmt.Errorf("failed to send text message: %w", err)
 	}
 
-	var resp MetaAPIResponse
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
+	messageID, err := parseMessageID(respBody)
+	if err != nil {
+		return "", err
 	}
-
-	if len(resp.Messages) == 0 {
-		return "", fmt.Errorf("no message ID in response")
-	}
-
-	messageID := resp.Messages[0].ID
 	c.Log.Info("Text message sent", "message_id", messageID, "phone", rcpt.Phone)
 	return messageID, nil
 }
@@ -139,16 +134,10 @@ func (c *Client) SendInteractiveButtons(ctx context.Context, account *Account, r
 		return "", fmt.Errorf("failed to send interactive message: %w", err)
 	}
 
-	var resp MetaAPIResponse
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
+	messageID, err := parseMessageID(respBody)
+	if err != nil {
+		return "", err
 	}
-
-	if len(resp.Messages) == 0 {
-		return "", fmt.Errorf("no message ID in response")
-	}
-
-	messageID := resp.Messages[0].ID
 	c.Log.Info("Interactive message sent", "message_id", messageID, "phone", rcpt.Phone)
 	return messageID, nil
 }
@@ -196,16 +185,10 @@ func (c *Client) SendCTAURLButton(ctx context.Context, account *Account, rcpt Re
 		return "", fmt.Errorf("failed to send CTA URL button message: %w", err)
 	}
 
-	var resp MetaAPIResponse
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
+	messageID, err := parseMessageID(respBody)
+	if err != nil {
+		return "", err
 	}
-
-	if len(resp.Messages) == 0 {
-		return "", fmt.Errorf("no message ID in response")
-	}
-
-	messageID := resp.Messages[0].ID
 	c.Log.Info("CTA URL button message sent", "message_id", messageID, "phone", rcpt.Phone)
 	return messageID, nil
 }
@@ -276,16 +259,10 @@ func (c *Client) SendVoiceCallButton(ctx context.Context, account *Account, rcpt
 		return "", fmt.Errorf("failed to send voice_call button message: %w", err)
 	}
 
-	var resp MetaAPIResponse
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
+	messageID, err := parseMessageID(respBody)
+	if err != nil {
+		return "", err
 	}
-
-	if len(resp.Messages) == 0 {
-		return "", fmt.Errorf("no message ID in response")
-	}
-
-	messageID := resp.Messages[0].ID
 	c.Log.Info("voice_call button message sent", "message_id", messageID, "phone", rcpt.Phone)
 	return messageID, nil
 }
@@ -379,30 +356,95 @@ func BodyParamsToComponents(bodyParams map[string]string) []map[string]any {
 	}
 }
 
+// HeaderTextParamsComponent builds the header component for a TEXT header that
+// contains one variable. Meta restricts TEXT headers to at most one variable,
+// so this returns an error if `headerContent` has more.
+//
+// `params` is the caller's value map (e.g. {"order_id": "ORD-1"} or {"1": "ORD-1"}).
+// `fallback` is consulted if the value isn't found in `params` — useful for
+// callers that share one flat map across header + body.
+//
+// Returns (nil, nil) when the header has no variable.
+func HeaderTextParamsComponent(headerContent string, params, fallback map[string]string) (map[string]any, error) {
+	if !strings.Contains(headerContent, "{{") {
+		return nil, nil
+	}
+	names := templateutil.ExtParamNames(headerContent)
+	if len(names) == 0 {
+		return nil, nil
+	}
+	if len(names) > 1 {
+		return nil, fmt.Errorf("header text may contain at most one variable; found %d", len(names))
+	}
+
+	name := names[0]
+	value := params[name]
+	if value == "" {
+		value = fallback[name]
+	}
+
+	param := map[string]any{
+		"type": "text",
+		"text": value,
+	}
+	// Named params include parameter_name; positional ("1") don't.
+	if _, err := strconv.Atoi(name); err != nil {
+		param["parameter_name"] = name
+	}
+
+	return map[string]any{
+		"type":       "header",
+		"parameters": []map[string]any{param},
+	}, nil
+}
+
 // BuildTemplateComponents builds the full WhatsApp template components array,
-// including an optional header component (for IMAGE/VIDEO/DOCUMENT) and body parameters.
+// including an optional header component (TEXT with variable, or IMAGE/VIDEO/
+// DOCUMENT media) and body parameters.
 //
 // headerMediaFilename is required by Meta for DOCUMENT headers — without it, the
 // API returns error 132012 "Header Format Mismatch (Expected DOCUMENT, received
 // UNKNOWN)". It is ignored for IMAGE/VIDEO.
-func BuildTemplateComponents(bodyParams map[string]string, headerType, headerMediaID, headerMediaFilename string) []map[string]any {
+//
+// headerContent and headerParams are only consulted for TEXT headers. For media
+// headers (IMAGE/VIDEO/DOCUMENT) the existing headerMediaID/Filename path is used.
+// Returns an error if the TEXT header declares more than one variable.
+func BuildTemplateComponents(
+	bodyParams map[string]string,
+	headerType, headerContent string,
+	headerParams map[string]string,
+	headerMediaID, headerMediaFilename string,
+) ([]map[string]any, error) {
 	var components []map[string]any
 
-	// Add header component if media is provided
-	if headerMediaID != "" {
-		mediaType := strings.ToLower(headerType) // "image", "video", "document"
-		mediaObj := map[string]any{"id": headerMediaID}
-		if mediaType == "document" && headerMediaFilename != "" {
-			mediaObj["filename"] = headerMediaFilename
+	switch strings.ToUpper(headerType) {
+	case "TEXT":
+		// Build a text-header parameter component when the approved template
+		// declares a {{var}} in the header text. Without this, Meta rejects
+		// sends of templates with header variables.
+		headerComp, err := HeaderTextParamsComponent(headerContent, headerParams, bodyParams)
+		if err != nil {
+			return nil, err
 		}
-		headerParam := map[string]any{
-			"type":    mediaType,
-			mediaType: mediaObj,
+		if headerComp != nil {
+			components = append(components, headerComp)
 		}
-		components = append(components, map[string]any{
-			"type":       "header",
-			"parameters": []map[string]any{headerParam},
-		})
+	case "IMAGE", "VIDEO", "DOCUMENT":
+		if headerMediaID != "" {
+			mediaType := strings.ToLower(headerType)
+			mediaObj := map[string]any{"id": headerMediaID}
+			if mediaType == "document" && headerMediaFilename != "" {
+				mediaObj["filename"] = headerMediaFilename
+			}
+			headerParam := map[string]any{
+				"type":    mediaType,
+				mediaType: mediaObj,
+			}
+			components = append(components, map[string]any{
+				"type":       "header",
+				"parameters": []map[string]any{headerParam},
+			})
+		}
 	}
 
 	// Add body component with text parameters
@@ -410,9 +452,9 @@ func BuildTemplateComponents(bodyParams map[string]string, headerType, headerMed
 	components = append(components, bodyComponents...)
 
 	if len(components) == 0 {
-		return nil
+		return nil, nil
 	}
-	return components
+	return components, nil
 }
 
 // AutoButtonComponents generates button components for button types that require
@@ -593,16 +635,10 @@ func (c *Client) SendFlowMessage(ctx context.Context, account *Account, rcpt Rec
 		return "", fmt.Errorf("failed to send flow message: %w", err)
 	}
 
-	var resp MetaAPIResponse
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
+	messageID, err := parseMessageID(respBody)
+	if err != nil {
+		return "", err
 	}
-
-	if len(resp.Messages) == 0 {
-		return "", fmt.Errorf("no message ID in response")
-	}
-
-	messageID := resp.Messages[0].ID
 	c.Log.Info("Flow message sent", "message_id", messageID, "phone", rcpt.Phone, "flow_id", flowID)
 	return messageID, nil
 }
@@ -636,16 +672,10 @@ func (c *Client) SendTemplateMessage(ctx context.Context, account *Account, rcpt
 		return "", fmt.Errorf("failed to send template message: %w", err)
 	}
 
-	var resp MetaAPIResponse
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
+	messageID, err := parseMessageID(respBody)
+	if err != nil {
+		return "", err
 	}
-
-	if len(resp.Messages) == 0 {
-		return "", fmt.Errorf("no message ID in response")
-	}
-
-	messageID := resp.Messages[0].ID
 	c.Log.Info("Template message sent", "message_id", messageID, "phone", rcpt.Phone, "template", templateName)
 	return messageID, nil
 }
