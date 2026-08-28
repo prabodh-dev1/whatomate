@@ -169,10 +169,13 @@ async function fetchAccounts() {
   try {
     const response = await api.get('/accounts')
     accounts.value = response.data.data?.accounts || []
-    // Validate stored account still exists, fallback to 'all' if not
-    if (selectedAccount.value !== 'all' && !accounts.value.some(a => a.name === selectedAccount.value)) {
-      selectedAccount.value = 'all'
-      localStorage.setItem('templates_selected_account', 'all')
+    const storedStillExists = accounts.value.some(a => a.name === selectedAccount.value)
+    if (selectedAccount.value !== 'all' && !storedStillExists) {
+      selectedAccount.value = accounts.value.length === 1 ? accounts.value[0].name : 'all'
+      localStorage.setItem('templates_selected_account', selectedAccount.value)
+    } else if (selectedAccount.value === 'all' && accounts.value.length === 1) {
+      selectedAccount.value = accounts.value[0].name
+      localStorage.setItem('templates_selected_account', selectedAccount.value)
     }
   } catch (error) {
     console.error('Failed to fetch accounts:', error)
@@ -333,7 +336,7 @@ function getHeaderIcon(type: string) {
                   <div class="flex items-center gap-2">
                     <Label class="text-sm text-muted-foreground">{{ $t('templates.account') }}:</Label>
                     <Select v-model="selectedAccount" @update:model-value="onAccountChange">
-                      <SelectTrigger class="w-[180px]">
+                      <SelectTrigger class="w-[320px]">
                         <SelectValue :placeholder="$t('templates.allAccounts')" />
                       </SelectTrigger>
                       <SelectContent>

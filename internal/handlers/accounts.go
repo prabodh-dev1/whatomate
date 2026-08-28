@@ -47,6 +47,7 @@ type AccountResponse struct {
 	IsDefaultOutgoing      bool       `json:"is_default_outgoing"`
 	AutoReadReceipt        bool       `json:"auto_read_receipt"`
 	BusinessCallingEnabled bool       `json:"business_calling_enabled"`
+	IsSMB                  bool       `json:"is_smb"`
 	Status                 string     `json:"status"`
 	HasAccessToken         bool       `json:"has_access_token"`
 	HasAppSecret           bool       `json:"has_app_secret"`
@@ -340,7 +341,9 @@ func (a *App) TestAccountConnection(r *fastglue.Request) error {
 		return nil
 	}
 
-	// Use the comprehensive validation function
+	// Validate token, phone, and WABA membership. Cloud API SMS verification
+	// is not a credential check — coexistence numbers stay NOT_VERIFIED until
+	// the WhatsApp Business app handshake finishes.
 	if err := a.validateAccountCredentials(account.PhoneID, account.BusinessID, account.AccessToken, account.APIVersion); err != nil {
 		a.Log.Error("Account test failed", "error", err, "account", account.Name)
 		return r.SendEnvelope(map[string]any{
@@ -350,7 +353,7 @@ func (a *App) TestAccountConnection(r *fastglue.Request) error {
 	}
 
 	// Fetch additional details for display
-	phoneURL := fmt.Sprintf("%s/%s/%s?fields=display_phone_number,verified_name,code_verification_status,account_mode,quality_rating,messaging_limit_tier,whatsapp_business_manager_messaging_limit",
+	phoneURL := fmt.Sprintf("%s/%s/%s?fields=display_phone_number,verified_name,code_verification_status,account_mode,quality_rating,messaging_limit_tier,whatsapp_business_manager_messaging_limit,is_on_biz_app,platform_type,status",
 		a.Config.WhatsApp.BaseURL, account.APIVersion, account.PhoneID)
 
 	result, status, err := a.fetchMetaJSON(phoneURL, account.AccessToken)
@@ -397,22 +400,46 @@ func (a *App) TestAccountConnection(r *fastglue.Request) error {
 		}
 	}
 
+	verificationStatus, _ := result["code_verification_status"].(string)
+	platformType, _ := result["platform_type"].(string)
+	phoneStatus, _ := result["status"].(string)
+	isOnBizApp, _ := result["is_on_biz_app"].(bool)
+	isMetaSMB := isOnBizApp || platformType == "SMB" || platformType == "SMB_CLOUD_API"
+	isCoexistence := account.IsSMB || isMetaSMB
+	readyToSend := isMetaSMB || (verificationStatus == "VERIFIED" && (phoneStatus == "" || phoneStatus == "CONNECTED"))
+
 	// Prepare response
 	response := map[string]any{
 		"success":                  true,
+		"ready_to_send":            readyToSend,
+		"mode":                     "cloud_api",
 		"display_phone_number":     result["display_phone_number"],
 		"verified_name":            result["verified_name"],
 		"quality_rating":           result["quality_rating"],
 		"messaging_limit_tier":     messagingLimitTier,
-		"code_verification_status": result["code_verification_status"],
+		"code_verification_status": verificationStatus,
 		"account_mode":             result["account_mode"],
 		"is_test_number":           isTestNumber,
+		"is_smb":                   isCoexistence,
+		"is_on_biz_app":            isOnBizApp,
+		"platform_type":            platformType,
+		"phone_status":             phoneStatus,
+	}
+	if isCoexistence {
+		response["mode"] = "coexistence"
 	}
 
-	// Add warning for test/sandbox numbers or expired verification
+	// Add warning for test/sandbox numbers, coexistence handshake, or expired verification
 	if isTestNumber {
 		response["warning"] = "This is a test/sandbox number. Not suitable for production use."
-	} else if verificationStatus, ok := result["code_verification_status"].(string); ok && verificationStatus == "EXPIRED" {
+	} else if isCoexistence && !readyToSend {
+		response["warning"] = "Token and WABA are valid, but WhatsApp Business is not connected to Cloud API yet. Keep the Facebook popup on Edit Settings until Meta shows a verification code, then confirm Connect to the Business Platform on the phone. Do not SMS-verify this number in WhatsApp Manager."
+	} else if !isCoexistence && verificationStatus == "NOT_VERIFIED" {
+		return r.SendEnvelope(map[string]any{
+			"success": false,
+			"error":   "phone number is not verified. Please register it at: https://business.facebook.com/wa/manage/phone-numbers/",
+		})
+	} else if verificationStatus == "EXPIRED" {
 		response["warning"] = "Phone verification has expired. Consider re-verifying at: https://business.facebook.com/wa/manage/phone-numbers/"
 	}
 
@@ -465,6 +492,7 @@ func accountToResponse(acc models.WhatsAppAccount) AccountResponse {
 		IsDefaultOutgoing:      acc.IsDefaultOutgoing,
 		AutoReadReceipt:        acc.AutoReadReceipt,
 		BusinessCallingEnabled: acc.BusinessCallingEnabled,
+		IsSMB:                  acc.IsSMB,
 		Status:                 acc.Status,
 		HasAccessToken:         acc.AccessToken != "",
 		HasAppSecret:           acc.AppSecret != "",
@@ -579,6 +607,8 @@ func (a *App) ExchangeToken(r *fastglue.Request) error {
 		WABAID             string `json:"waba_id"`  // Optional: Discovered via token if missing
 		Name               string `json:"name"`
 		WebhookVerifyToken string `json:"webhook_verify_token"`
+		RedirectURI        string `json:"redirect_uri"` // Optional; Facebook JS SDK URLs are omitted on exchange
+		Coexistence        bool   `json:"coexistence"`  // Sync with Mobile App — skip Cloud API /register
 	}
 	if err := a.decodeRequest(r, &req); err != nil {
 		return nil
@@ -587,6 +617,8 @@ func (a *App) ExchangeToken(r *fastglue.Request) error {
 	a.Log.Info("Received embedded signup exchange token request",
 		"phone_id", req.PhoneID,
 		"waba_id", req.WABAID,
+		"has_redirect_uri", req.RedirectURI != "",
+		"coexistence", req.Coexistence,
 		"organization_id", orgID)
 
 	if req.Code == "" {
@@ -601,10 +633,10 @@ func (a *App) ExchangeToken(r *fastglue.Request) error {
 
 	// 2. Exchange code for user access token using WhatsApp service
 	ctx := context.Background()
-	a.Log.Info("Exchanging code for access token")
+	a.Log.Info("Exchanging code for access token", "has_redirect_uri", req.RedirectURI != "")
 
 	accessToken, err := a.WhatsApp.ExchangeCodeForToken(ctx, req.Code,
-		appID, appSecret, a.Config.WhatsApp.APIVersion)
+		appID, appSecret, a.Config.WhatsApp.APIVersion, req.RedirectURI)
 	if err != nil {
 		a.Log.Error("Failed to exchange token", "error", err)
 		return r.SendErrorEnvelope(fasthttp.StatusBadRequest, err.Error(), nil, "")
@@ -617,7 +649,7 @@ func (a *App) ExchangeToken(r *fastglue.Request) error {
 	}
 
 	// 3. We can now create/update the account
-	account, phoneInfo, existingAccount, oldAccount, err := a.createOrUpdateAccount(ctx, orgID, phoneID, wabaID, name, req.WebhookVerifyToken, accessToken, appSecret)
+	account, phoneInfo, existingAccount, oldAccount, err := a.createOrUpdateAccount(ctx, orgID, phoneID, wabaID, name, req.WebhookVerifyToken, accessToken, appSecret, req.Coexistence)
 	if err != nil {
 		return r.SendErrorEnvelope(fasthttp.StatusInternalServerError, err.Error(), nil, "")
 	}
@@ -684,9 +716,13 @@ func (a *App) discoverWABAAndPhone(ctx context.Context, orgID uuid.UUID, accessT
 		return phoneID, wabaID, name, nil
 	}
 
+	candidateWABAs := make([]string, 0, 4)
+	if wabaID != "" {
+		candidateWABAs = append(candidateWABAs, wabaID)
+	}
+
 	a.Log.Info("Missing PhoneID/WABAID, attempting discovery via debug_token")
 
-	// 1. Resolve Meta credentials for this org
 	appID, appSecret, _, err := a.resolveMetaAppCreds(orgID)
 	if err != nil {
 		return "", "", "", err
@@ -700,58 +736,80 @@ func (a *App) discoverWABAAndPhone(ctx context.Context, orgID uuid.UUID, accessT
 		return "", "", "", fmt.Errorf("failed to validate token details: %w", err)
 	}
 
-	// 2. Find WABA ID from Granular Scopes
-	var discoveredWABAID string
 	for _, scope := range debugInfo.GranularScopes {
-		if scope.Scope == "whatsapp_business_management" {
-			if len(scope.TargetIds) > 0 {
-				discoveredWABAID = scope.TargetIds[0]
-				break
+		if scope.Scope != "whatsapp_business_management" {
+			continue
+		}
+		for _, id := range scope.TargetIds {
+			if id != "" && !containsString(candidateWABAs, id) {
+				candidateWABAs = append(candidateWABAs, id)
 			}
 		}
 	}
 
-	if discoveredWABAID == "" {
+	if len(candidateWABAs) == 0 {
 		a.Log.Warn("No WABA ID found in granular scopes, falling back to /me/accounts strategy")
 		sharedInfo, err := a.WhatsApp.GetSharedWABA(ctx, accessToken)
-		if err == nil && len(sharedInfo.Data) > 0 {
-			discoveredWABAID = sharedInfo.Data[0].ID
+		if err == nil {
+			for _, acct := range sharedInfo.Data {
+				if acct.ID != "" && !containsString(candidateWABAs, acct.ID) {
+					candidateWABAs = append(candidateWABAs, acct.ID)
+				}
+			}
 		}
 	}
 
-	if discoveredWABAID == "" {
+	if len(candidateWABAs) == 0 {
 		return "", "", "", fmt.Errorf("could not discover WhatsApp Business Account ID from token")
 	}
 
-	wabaID = discoveredWABAID
-	a.Log.Info("Discovered WABA ID", "waba_id", wabaID)
+	a.Log.Info("Discovered WABA candidates", "count", len(candidateWABAs), "preferred", candidateWABAs[0])
 
-	if phoneID == "" {
-		phonesResp, err := a.WhatsApp.GetWABAPhoneNumbers(ctx, wabaID, accessToken)
+	if phoneID != "" {
+		if wabaID == "" {
+			wabaID = candidateWABAs[0]
+		}
+		return phoneID, wabaID, name, nil
+	}
+
+	var lastFetchErr error
+	for _, id := range candidateWABAs {
+		phonesResp, err := a.WhatsApp.GetWABAPhoneNumbers(ctx, id, accessToken)
 		if err != nil {
-			a.Log.Error("Failed to fetch phone numbers from Meta", "error", err)
-			return "", "", "", fmt.Errorf("failed to fetch phone numbers from WABA: %w", err)
+			a.Log.Error("Failed to fetch phone numbers from Meta", "error", err, "waba_id", id)
+			lastFetchErr = err
+			continue
 		}
-
 		if len(phonesResp.Data) == 0 {
-			return "", "", "", fmt.Errorf("no phone numbers found in this WhatsApp Business Account")
+			a.Log.Warn("WABA has no phone numbers, trying next", "waba_id", id)
+			continue
 		}
-
 		if len(phonesResp.Data) > 1 {
-			a.Log.Warn("Multiple phone numbers discovered in WABA; picking the first one", "count", len(phonesResp.Data))
+			a.Log.Warn("Multiple phone numbers discovered in WABA; picking the first one", "count", len(phonesResp.Data), "waba_id", id)
 		}
-
-		// User selects only ONE account in the flow, so we take the first one found.
 		phone := phonesResp.Data[0]
 		phoneID = phone.ID
 		name = fmt.Sprintf("%s (%s)", phone.VerifiedName, phone.DisplayPhoneNumber)
-		a.Log.Info("Discovered Phone ID", "phone_id", phoneID)
+		a.Log.Info("Discovered Phone ID", "phone_id", phoneID, "waba_id", id)
+		return phoneID, id, name, nil
 	}
 
-	return phoneID, wabaID, name, nil
+	if lastFetchErr != nil {
+		return "", "", "", fmt.Errorf("failed to fetch phone numbers from WABA: %w", lastFetchErr)
+	}
+	return "", "", "", fmt.Errorf("no phone numbers found in this WhatsApp Business Account")
 }
 
-func (a *App) createOrUpdateAccount(ctx context.Context, orgID uuid.UUID, phoneID, wabaID, name, webhookVerifyToken, accessToken, appSecret string) (*models.WhatsAppAccount, *whatsapp.PhoneNumberInfo, bool, *models.WhatsAppAccount, error) {
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) createOrUpdateAccount(ctx context.Context, orgID uuid.UUID, phoneID, wabaID, name, webhookVerifyToken, accessToken, appSecret string, preferSMB bool) (*models.WhatsAppAccount, *whatsapp.PhoneNumberInfo, bool, *models.WhatsAppAccount, error) {
 	var account models.WhatsAppAccount
 	var existingAccount bool
 	var oldAccount *models.WhatsAppAccount
@@ -796,6 +854,9 @@ func (a *App) createOrUpdateAccount(ctx context.Context, orgID uuid.UUID, phoneI
 	}
 
 	var isSMB bool
+	if preferSMB {
+		isSMB = true
+	}
 	if phoneInfo != nil {
 		if phoneInfo.IsOnBizApp || phoneInfo.PlatformType == "SMB" || phoneInfo.PlatformType == "SMB_CLOUD_API" {
 			isSMB = true

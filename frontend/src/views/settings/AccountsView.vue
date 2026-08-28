@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -63,6 +63,7 @@ const whatsappConfig = ref<{ app_id: string; config_id: string; api_version: str
 const isFBSDKLoaded = ref(false)
 const isConnectingFB = ref(false)
 const showOnboardingDialog = ref(false)
+const embeddedSession = ref<{ phone_number_id?: string; waba_id?: string }>({})
 
 const canWrite = computed(() => authStore.hasPermission('accounts', 'write'))
 const canDelete = computed(() => authStore.hasPermission('accounts', 'delete'))
@@ -87,8 +88,28 @@ watch(() => organizationsStore.selectedOrgId, () => {
   fetchWhatsAppConfig()
 })
 onMounted(async () => {
+  window.addEventListener('message', onFacebookEmbeddedSignupMessage)
   await Promise.all([fetchAccounts(), fetchWhatsAppConfig()])
 })
+onUnmounted(() => {
+  window.removeEventListener('message', onFacebookEmbeddedSignupMessage)
+})
+
+function onFacebookEmbeddedSignupMessage(event: MessageEvent) {
+  if (!String(event.origin).endsWith('facebook.com')) return
+  let payload: any
+  try {
+    payload = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
+  } catch {
+    return
+  }
+  if (payload?.type !== 'WA_EMBEDDED_SIGNUP') return
+  if (payload.event !== 'FINISH' && payload.event !== 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING') return
+  embeddedSession.value = {
+    phone_number_id: payload.data?.phone_number_id || '',
+    waba_id: payload.data?.waba_id || '',
+  }
+}
 
 async function fetchAccounts() {
   isLoading.value = true
@@ -152,6 +173,7 @@ function launchWhatsAppSignup(isCoexistence: boolean = true) {
 
   showOnboardingDialog.value = false
   isConnectingFB.value = true
+  embeddedSession.value = {}
 
   const loginOptions: any = {
     config_id: whatsappConfig.value.config_id,
@@ -172,6 +194,9 @@ function launchWhatsAppSignup(isCoexistence: boolean = true) {
     }
   }
 
+  // FB.login issues a JS SDK code bound to Facebook's xd_arbiter popup.
+  // Do not forward that redirect_uri to Graph /oauth/access_token — Meta
+  // rejects Facebook-owned URLs with "redirect_uri is identical...".
   window.FB.login(
     (response: any) => {
       if (response.authResponse) {
@@ -185,7 +210,15 @@ function launchWhatsAppSignup(isCoexistence: boolean = true) {
           return
         }
 
-        exchangeCodeForToken(code, phoneNumberId, wabaId)
+        // Session event (waba_id / phone_number_id) can arrive just after the login callback.
+        window.setTimeout(() => {
+          exchangeCodeForToken(
+            code,
+            phoneNumberId || embeddedSession.value.phone_number_id || '',
+            wabaId || embeddedSession.value.waba_id || '',
+            isCoexistence
+          )
+        }, 300)
       } else if (response.error) {
         console.error('Facebook SDK error:', response.error)
         toast.error(`Facebook error: ${response.error.message || 'Unknown error'}`)
@@ -199,12 +232,13 @@ function launchWhatsAppSignup(isCoexistence: boolean = true) {
   )
 }
 
-async function exchangeCodeForToken(code: string, phoneNumberId: string, wabaId: string) {
+async function exchangeCodeForToken(code: string, phoneNumberId: string, wabaId: string, coexistence = true) {
   try {
     const response = await api.post('/accounts/exchange-token', {
       code,
       phone_id: phoneNumberId,
-      waba_id: wabaId
+      waba_id: wabaId,
+      coexistence
     })
 
     const account = response.data.data.account

@@ -94,17 +94,28 @@ async function refreshAccessToken(): Promise<void> {
   }
 }
 
+// Login/register/refresh/logout/SSO must not trigger a refresh (would loop).
+// Authenticated /auth/* routes such as /auth/ws-token and /auth/switch-org must.
+function shouldSkipTokenRefresh(url?: string): boolean {
+  if (!url) return false
+  const path = url.split('?')[0]
+  if (path.includes('/auth/sso')) return true
+  return (
+    path.endsWith('/auth/login') ||
+    path.endsWith('/auth/register') ||
+    path.endsWith('/auth/refresh') ||
+    path.endsWith('/auth/logout')
+  )
+}
+
 // Response interceptor for error handling
 api.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean }
 
-    // Skip token refresh logic for auth endpoints
-    const isAuthEndpoint = originalRequest?.url?.startsWith('/auth/')
-
-    // Handle 401 errors - try to refresh token (but not for auth endpoints)
-    if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint) {
+    // Handle 401 errors - try to refresh token (but not for public auth endpoints)
+    if (error.response?.status === 401 && !originalRequest._retry && !shouldSkipTokenRefresh(originalRequest?.url)) {
       originalRequest._retry = true
 
       // If a refresh is already in flight, queue this request to wait for it
@@ -141,6 +152,7 @@ api.interceptors.response.use(
         localStorage.removeItem('user')
         localStorage.removeItem('auth_token')
         localStorage.removeItem('refresh_token')
+        void import('@/services/websocket').then(m => m.wsService.disconnect())
         window.location.href = basePath + '/login'
       }
     }

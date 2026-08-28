@@ -21,6 +21,7 @@ func TestClient_ExchangeCodeForToken(t *testing.T) {
 		appID           string
 		appSecret       string
 		apiVersion      string
+		redirectURI     string
 		serverResponse  func(t *testing.T, w http.ResponseWriter, r *http.Request)
 		wantToken       string
 		wantErr         bool
@@ -39,8 +40,45 @@ func TestClient_ExchangeCodeForToken(t *testing.T) {
 				assert.Contains(t, r.URL.RawQuery, "client_id=123456")
 				assert.Contains(t, r.URL.RawQuery, "client_secret=secret123")
 				assert.Contains(t, r.URL.RawQuery, "code=test_auth_code_123")
+				assert.NotContains(t, r.URL.RawQuery, "redirect_uri=")
 
 				// Return success
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"access_token": "EAABwzLixnjYBO1234567890",
+					"token_type":   "bearer",
+				})
+			},
+			wantToken: "EAABwzLixnjYBO1234567890",
+			wantErr:   false,
+		},
+		{
+			name:        "includes redirect_uri when provided",
+			code:        "test_auth_code_123",
+			appID:       "123456",
+			appSecret:   "secret123",
+			apiVersion:  "v24.0",
+			redirectURI: "https://crm.prabodh.in/settings/accounts",
+			serverResponse: func(t *testing.T, w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "https://crm.prabodh.in/settings/accounts", r.URL.Query().Get("redirect_uri"))
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"access_token": "EAABwzLixnjYBO1234567890",
+					"token_type":   "bearer",
+				})
+			},
+			wantToken: "EAABwzLixnjYBO1234567890",
+			wantErr:   false,
+		},
+		{
+			name:        "omits facebook xd_arbiter redirect_uri",
+			code:        "test_auth_code_123",
+			appID:       "123456",
+			appSecret:   "secret123",
+			apiVersion:  "v24.0",
+			redirectURI: "https://staticxx.facebook.com/x/connect/xd_arbiter/?version=46#cb=f1&origin=https%3A%2F%2Fcrm.prabodh.in",
+			serverResponse: func(t *testing.T, w http.ResponseWriter, r *http.Request) {
+				assert.NotContains(t, r.URL.RawQuery, "redirect_uri=")
 				w.WriteHeader(http.StatusOK)
 				_ = json.NewEncoder(w).Encode(map[string]string{
 					"access_token": "EAABwzLixnjYBO1234567890",
@@ -137,7 +175,7 @@ func TestClient_ExchangeCodeForToken(t *testing.T) {
 
 			ctx := testutil.TestContext(t)
 
-			token, err := client.ExchangeCodeForToken(ctx, tt.code, tt.appID, tt.appSecret, tt.apiVersion)
+			token, err := client.ExchangeCodeForToken(ctx, tt.code, tt.appID, tt.appSecret, tt.apiVersion, tt.redirectURI)
 
 			if tt.wantErr {
 				require.Error(t, err)

@@ -59,6 +59,7 @@ interface WhatsAppAccount {
   is_default_outgoing: boolean
   auto_read_receipt: boolean
   status: string
+  is_smb?: boolean
   has_access_token: boolean
   has_app_secret: boolean
   phone_number?: string
@@ -74,6 +75,13 @@ interface WhatsAppAccount {
 interface TestResult {
   success: boolean
   error?: string
+  warning?: string
+  ready_to_send?: boolean
+  mode?: string
+  is_smb?: boolean
+  is_on_biz_app?: boolean
+  platform_type?: string
+  phone_status?: string
   display_phone_number?: string
   verified_name?: string
   quality_rating?: string
@@ -81,7 +89,6 @@ interface TestResult {
   code_verification_status?: string
   account_mode?: string
   is_test_number?: boolean
-  warning?: string
 }
 
 const route = useRoute()
@@ -222,7 +229,11 @@ async function testConnection() {
     const response = await api.post(`/accounts/${account.value.id}/test`)
     testResult.value = response.data.data
     if (testResult.value?.success) {
-      toast.success(t('accounts.connectionSuccess', 'Connection successful'))
+      if (testResult.value.warning) {
+        toast.warning(testResult.value.warning)
+      } else {
+        toast.success(t('accounts.connectionSuccess', 'Connection successful'))
+      }
     } else {
       toast.error(t('accounts.connectionFailed', 'Connection failed') + ': ' + (testResult.value?.error || ''))
     }
@@ -312,8 +323,11 @@ onMounted(async () => {
         <div v-if="testResult.success" class="space-y-2">
           <div class="flex items-center gap-2 text-green-400 light:text-green-600">
             <CheckCircle2 class="h-4 w-4" />
-            <span class="text-sm font-medium">{{ $t('accounts.connected', 'Connected') }}</span>
+            <span class="text-sm font-medium">{{ testResult.ready_to_send === false ? $t('accounts.credentialsValid', 'Credentials valid') : $t('accounts.connected', 'Connected') }}</span>
             <span v-if="testResult.display_phone_number" class="text-sm text-muted-foreground">— {{ testResult.display_phone_number }}</span>
+            <Badge v-if="testResult.mode === 'coexistence'" variant="outline" class="border-emerald-600 text-emerald-500">
+              Sync with Mobile App
+            </Badge>
             <Badge v-if="testResult.is_test_number" variant="outline" class="border-amber-600 text-amber-600">
               <TestTube2 class="h-3 w-3 mr-1" /> {{ $t('accounts.testNumber', 'Test Number') }}
             </Badge>
@@ -354,6 +368,14 @@ onMounted(async () => {
                   {{ getVerificationStatusLabel(testResult.code_verification_status, t) }}
                 </Badge>
               </div>
+              <div v-if="testResult.phone_status" class="space-y-1">
+                <span class="text-[10px] text-muted-foreground block font-medium">Cloud API status</span>
+                <span class="text-sm font-semibold block text-foreground">{{ testResult.phone_status }}</span>
+              </div>
+              <div v-if="testResult.platform_type" class="space-y-1">
+                <span class="text-[10px] text-muted-foreground block font-medium">Platform</span>
+                <span class="text-sm font-semibold block text-foreground">{{ testResult.platform_type }}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -371,6 +393,9 @@ onMounted(async () => {
           <CardTitle class="text-sm font-medium">{{ $t('accounts.accountDetails', 'Account Details') }}</CardTitle>
           <Badge v-if="account" :variant="account.status === 'active' ? 'default' : 'secondary'">
             {{ account.status }}
+          </Badge>
+          <Badge v-if="account?.is_smb" variant="outline" class="border-emerald-600 text-emerald-500">
+            Sync with Mobile App
           </Badge>
         </div>
       </CardHeader>

@@ -28,22 +28,23 @@ const authStore = useAuthStore()
 const isCollapsed = ref(false)
 const isMobileMenuOpen = ref(false)
 
-// Refresh user data and connect WebSocket on mount
-onMounted(() => {
-  if (authStore.isAuthenticated) {
-    // Fetch fresh permissions in background (non-destructive — interceptor handles 401)
-    authStore.refreshUserData()
+// Refresh the access cookie (15 min TTL) before the first WS token fetch so
+// /auth/ws-token is not called with an expired/missing whm_access cookie.
+onMounted(async () => {
+  if (!authStore.isAuthenticated) return
 
-    wsService.connect(async () => {
-      try {
-        const resp = await authService.getWSToken()
-        const data = resp.data.data ?? resp.data
-        return data?.token ?? null
-      } catch {
-        return null
-      }
-    })
-  }
+  await authStore.refreshUserData()
+  if (!authStore.isAuthenticated) return
+
+  wsService.connect(async () => {
+    try {
+      const resp = await authService.getWSToken()
+      const data = resp.data.data ?? resp.data
+      return data?.token ?? null
+    } catch {
+      return null
+    }
+  })
 })
 
 function filterItems(items: NavSection['items']) {

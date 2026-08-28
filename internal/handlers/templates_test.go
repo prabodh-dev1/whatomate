@@ -241,6 +241,36 @@ func TestApp_ListTemplates_FilterByAccount(t *testing.T) {
 	}
 }
 
+func TestApp_ListTemplates_ExcludesDeletedAccount(t *testing.T) {
+	t.Parallel()
+
+	app := newTestApp(t)
+	org := testutil.CreateTestOrganization(t, app.DB)
+	user := testutil.CreateTestUser(t, app.DB, org.ID)
+	live := testutil.CreateTestWhatsAppAccount(t, app.DB, org.ID)
+	gone := testutil.CreateTestWhatsAppAccount(t, app.DB, org.ID)
+
+	createTestTemplateInDB(t, app, org.ID, live.Name, "live_tmpl", "APPROVED")
+	createTestTemplateInDB(t, app, org.ID, gone.Name, "old_tmpl", "APPROVED")
+	require.NoError(t, app.DB.Delete(gone).Error)
+
+	req := testutil.NewGETRequest(t)
+	testutil.SetAuthContext(req, org.ID, user.ID)
+
+	err := app.ListTemplates(req)
+	require.NoError(t, err)
+	assert.Equal(t, fasthttp.StatusOK, testutil.GetResponseStatusCode(req))
+
+	var resp struct {
+		Data struct {
+			Templates []handlers.TemplateResponse `json:"templates"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(testutil.GetResponseBody(req), &resp))
+	require.Len(t, resp.Data.Templates, 1)
+	assert.Equal(t, "live_tmpl", resp.Data.Templates[0].Name)
+}
+
 func TestApp_ListTemplates_FilterByStatus(t *testing.T) {
 	t.Parallel()
 

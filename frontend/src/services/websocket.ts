@@ -113,6 +113,13 @@ class WebSocketService {
   private getTokenFn: (() => Promise<string | null>) | null = null
 
   async connect(getToken?: () => Promise<string | null>) {
+    // Facebook's JS SDK (Embedded Signup) can load this origin in a hidden
+    // frame. That context has no first-party cookies, so /auth/ws-token 401s
+    // and reconnect-loops. Never open a socket from an iframe.
+    if (this.inEmbeddedFrame()) {
+      return
+    }
+
     // isConnecting covers the async token-fetch window below, during which
     // this.ws still holds the previous (closed) socket: on a device wake,
     // visibilitychange/online/pageshow and a pending backoff timer can all
@@ -671,15 +678,33 @@ class WebSocketService {
     }, delay)
   }
 
+  private inEmbeddedFrame(): boolean {
+    try {
+      return window.self !== window.top
+    } catch {
+      return true
+    }
+  }
+
   private reconnectIfDead() {
-    if (this.intentionalClose || !this.isAuthenticated()) {
+    if (this.intentionalClose || !this.isAuthenticated() || this.isConnecting) {
       return
     }
     const state = this.ws?.readyState
-    if (state !== WebSocket.OPEN && state !== WebSocket.CONNECTING) {
-      this.reconnectAttempts = 0
-      this.connect()
+    if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) {
+      return
     }
+
+    // Only punch through backoff after we have had a live socket (device wake /
+    // tab visible). Otherwise a failed token fetch + Facebook popup focus churn
+    // resets delay to 0 and hammers GET /auth/ws-token.
+    if (!this.hasConnectedBefore) {
+      if (this.reconnectTimer !== null) return
+      this.connect()
+      return
+    }
+    this.reconnectAttempts = 0
+    this.connect()
   }
 
   // Stable handler references so removeLifecycleListeners() can detach them;

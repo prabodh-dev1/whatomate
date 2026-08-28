@@ -25,6 +25,8 @@ import {
   Loader2,
 } from 'lucide-vue-next'
 import type { Message } from '@/stores/contacts'
+import { getRequestHeaders } from '@/services/api'
+import { useAuthenticatedMedia } from '@/composables/useAuthenticatedMedia'
 
 const props = defineProps<{ items: Message[] }>()
 const open = defineModel<boolean>('open', { default: false })
@@ -35,11 +37,11 @@ const total = computed(() => props.items.length)
 const hasPrev = computed(() => index.value > 0)
 const hasNext = computed(() => index.value < total.value - 1)
 
-// Same URL the chat bubbles use: relative, same-origin, auth-cookie gated.
+const { urls: mediaUrls, prefetch: prefetchMedia, clear: clearMediaCache, mediaEndpoint } = useAuthenticatedMedia()
+
+// Same URL the chat bubbles use, but fetched with org header for super-admin org switching.
 function mediaUrl(m: Message): string {
-  if (!m.media_url) return ''
-  const basePath = ((window as any).__BASE_PATH__ ?? '').replace(/\/$/, '')
-  return `${basePath}/api/media/${m.id}`
+  return mediaUrls.value[m.id] || ''
 }
 
 type Kind = 'image' | 'video' | 'pdf' | 'file'
@@ -123,7 +125,7 @@ async function loadPdf(m: Message) {
   clearPdf()
   pdfLoading.value = true
   try {
-    const res = await fetch(mediaUrl(m), { credentials: 'same-origin' })
+    const res = await fetch(mediaEndpoint(m.id), { credentials: 'same-origin', headers: getRequestHeaders() })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const blob = await res.blob()
     if (my !== pdfReqId) return // superseded by a newer navigation
@@ -139,25 +141,24 @@ async function loadPdf(m: Message) {
   }
 }
 
-// React to open / navigation: reset zoom and (re)load PDFs on demand.
-//
-// Watch the current item's IDENTITY, not the items array: `items` is a computed
-// .filter() that allocates a new array on every recompute, and the messages it
-// filters are mutated by inbound WS messages and delivery-status updates. A
-// sent → delivered → read receipt would otherwise reset zoom/pan and re-fetch
-// the whole PDF while the viewer is open. Keying on the id also absorbs the
-// index shift when loadOlderMessages() prepends history.
+// React to open / navigation: reset zoom, prefetch media, and (re)load PDFs on demand.
 watch(
   [open, () => current.value?.id],
   () => {
     resetZoom()
     const m = current.value
+    if (open.value && m?.media_url) {
+      void prefetchMedia(m)
+    }
     if (open.value && m && mediaKind(m) === 'pdf') loadPdf(m)
     else clearPdf()
   },
   { immediate: true },
 )
-onBeforeUnmount(clearPdf)
+onBeforeUnmount(() => {
+  clearPdf()
+  clearMediaCache()
+})
 
 function closeOnBackdrop() { open.value = false }
 </script>
@@ -244,8 +245,9 @@ function closeOnBackdrop() { open.value = false }
 
         <!-- Image / sticker -->
         <img
-          v-if="current && currentKind === 'image'"
+          v-if="current && currentKind === 'image' && currentUrl"
           :src="currentUrl"
+          :key="currentUrl"
           :alt="filename || 'Image'"
           class="max-w-full max-h-full object-contain"
           :style="imageStyle"

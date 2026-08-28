@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/zerodha/logf"
@@ -140,6 +142,8 @@ type CredentialsValidationResult struct {
 	IsTestNumber           bool
 	QualityRating          string
 	CodeVerificationStatus string
+	IsOnBizApp             bool
+	PlatformType           string
 	Warning                string
 }
 
@@ -168,18 +172,16 @@ func (c *Client) ValidateCredentials(ctx context.Context, phoneID, businessID, a
 		return nil, fmt.Errorf("failed to parse phone response: %w", err)
 	}
 
-	// Check verification status (skip for sandbox/test numbers and SMB accounts)
+	// Sandbox and SMB/coexistence numbers are valid credentials even when
+	// Cloud API code verification is still pending. Do not treat NOT_VERIFIED
+	// as a credential failure — that path is WhatsApp Manager SMS verify,
+	// which disconnects the Business app.
 	isTestNumber := phoneResult.AccountMode == "SANDBOX" || phoneResult.VerifiedName == "Test Number"
 	isSMB := phoneResult.IsOnBizApp || phoneResult.PlatformType == "SMB" || phoneResult.PlatformType == "SMB_CLOUD_API"
 
 	var warning string
-	if !isTestNumber && !isSMB {
-		if phoneResult.CodeVerificationStatus == "NOT_VERIFIED" {
-			return nil, fmt.Errorf("phone number is not verified. Please register it at: https://business.facebook.com/wa/manage/phone-numbers/")
-		}
-		if phoneResult.CodeVerificationStatus == "EXPIRED" {
-			warning = "Phone verification has expired. Consider re-verifying at: https://business.facebook.com/wa/manage/phone-numbers/"
-		}
+	if !isTestNumber && !isSMB && phoneResult.CodeVerificationStatus == "EXPIRED" {
+		warning = "Phone verification has expired. Consider re-verifying at: https://business.facebook.com/wa/manage/phone-numbers/"
 	}
 
 	// 2. Validate BusinessID
@@ -222,6 +224,8 @@ func (c *Client) ValidateCredentials(ctx context.Context, phoneID, businessID, a
 		IsTestNumber:           isTestNumber,
 		QualityRating:          phoneResult.QualityRating,
 		CodeVerificationStatus: phoneResult.CodeVerificationStatus,
+		IsOnBizApp:             phoneResult.IsOnBizApp,
+		PlatformType:           phoneResult.PlatformType,
 		Warning:                warning,
 	}, nil
 }
@@ -593,13 +597,46 @@ type TokenExchangeResponse struct {
 	TokenType   string `json:"token_type"`
 }
 
-// ExchangeCodeForToken exchanges a Facebook authorization code for a permanent access token
-func (c *Client) ExchangeCodeForToken(ctx context.Context, code, appID, appSecret, apiVersion string) (string, error) {
-	url := fmt.Sprintf("%s/%s/oauth/access_token?client_id=%s&client_secret=%s&code=%s",
-		c.getBaseURL(), apiVersion, appID, appSecret, code)
+// sanitizeOAuthRedirectURI drops Facebook-owned JS SDK callback URLs (xd_arbiter
+// on staticxx.facebook.com). Meta rejects those on /oauth/access_token with
+// "redirect_uri is identical to the one you used in the OAuth dialog". Codes
+// from FB.login must be exchanged with redirect_uri omitted.
+func sanitizeOAuthRedirectURI(redirectURI string) string {
+	if redirectURI == "" {
+		return ""
+	}
+	u, err := url.Parse(redirectURI)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "facebook.com" || strings.HasSuffix(host, ".facebook.com") ||
+		host == "fb.com" || strings.HasSuffix(host, ".fb.com") {
+		return ""
+	}
+	return redirectURI
+}
+
+// ExchangeCodeForToken exchanges a Facebook authorization code for a permanent access token.
+// Pass redirectURI only when the code was issued for your own OAuth redirect
+// (not the FB.login JS SDK popup). Facebook-owned URLs are omitted.
+func (c *Client) ExchangeCodeForToken(ctx context.Context, code, appID, appSecret, apiVersion, redirectURI string) (string, error) {
+	cleaned := sanitizeOAuthRedirectURI(redirectURI)
+	if redirectURI != "" && cleaned == "" {
+		c.Log.Info("Omitting Facebook-owned redirect_uri from token exchange")
+	}
+	redirectURI = cleaned
+	q := url.Values{}
+	q.Set("client_id", appID)
+	q.Set("client_secret", appSecret)
+	q.Set("code", code)
+	if redirectURI != "" {
+		q.Set("redirect_uri", redirectURI)
+	}
+	tokenURL := fmt.Sprintf("%s/%s/oauth/access_token?%s", c.getBaseURL(), apiVersion, q.Encode())
 
 	// OAuth endpoint doesn't require Authorization header, so we make a direct request
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create token exchange request: %w", err)
 	}

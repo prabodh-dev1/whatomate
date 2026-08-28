@@ -13,6 +13,7 @@ import { TagBadge } from '@/components/ui/tag-badge'
 import { getTagColorClass } from '@/lib/constants'
 import { getErrorMessage } from '@/lib/api-utils'
 import { compressImage } from '@/lib/imageCompression'
+import { useAuthenticatedMedia } from '@/composables/useAuthenticatedMedia'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -155,8 +156,13 @@ const isUploadingMedia = ref(false)
 const mediaViewerOpen = ref(false)
 const mediaViewerIndex = ref(0)
 
-// Cache for media blob URLs (message_id -> blob URL)
-
+const {
+  urls: mediaUrls,
+  prefetch: prefetchMedia,
+  prefetchMany: prefetchAllMedia,
+  hasFailed: hasMediaLoadFailed,
+  clear: clearMediaCache,
+} = useAuthenticatedMedia()
 
 // Canned responses slash command state
 const cannedPickerOpen = ref(false)
@@ -558,6 +564,7 @@ onUnmounted(() => {
   if (stickyDateTimeout) clearTimeout(stickyDateTimeout)
   document.removeEventListener('visibilitychange', onUserActive)
   window.removeEventListener('focus', onUserActive)
+  clearMediaCache()
 })
 
 function updateStickyDate(scrollContainer: HTMLElement) {
@@ -639,19 +646,27 @@ async function selectContact(id: string) {
     }
     contactAccounts.value = Array.from(accounts).sort()
 
+    const liveAccountNames = new Set(orgAccounts.value.map((a: { name?: string }) => a.name).filter(Boolean))
+    const pickLiveAccount = (name?: string | null) => {
+      if (name && liveAccountNames.has(name)) return name
+      return orgAccounts.value[0]?.name || name || null
+    }
+
     // Auto-select account and filter client-side (avoids a second fetch)
     if (orgAccounts.value.length > 1) {
       // Find account of the most recent incoming message
       for (let i = contactsStore.messages.length - 1; i >= 0; i--) {
         const msg = contactsStore.messages[i]
         if (msg.direction === 'incoming' && msg.whatsapp_account) {
-          selectedAccount.value = msg.whatsapp_account
+          selectedAccount.value = pickLiveAccount(msg.whatsapp_account)
           break
         }
       }
       // Fallback to contact's default account, then first org account
       if (!selectedAccount.value) {
-        selectedAccount.value = contact.whatsapp_account || contactAccounts.value[0] || orgAccounts.value[0]?.name
+        selectedAccount.value = pickLiveAccount(
+          contact.whatsapp_account || contactAccounts.value[0] || orgAccounts.value[0]?.name
+        )
       }
       if (selectedAccount.value) {
         contactsStore.setAccountFilter(selectedAccount.value)
@@ -661,9 +676,9 @@ async function selectContact(id: string) {
         )
       }
     } else if (contactAccounts.value.length === 1) {
-      selectedAccount.value = contactAccounts.value[0]
+      selectedAccount.value = pickLiveAccount(contactAccounts.value[0])
     } else if (contact.whatsapp_account) {
-      selectedAccount.value = contact.whatsapp_account
+      selectedAccount.value = pickLiveAccount(contact.whatsapp_account)
     }
 
     // Tell WebSocket server which contact we're viewing
@@ -729,12 +744,9 @@ watch(() => contactsStore.messages.length, (newLen, oldLen) => {
   }
 })
 
-// Watch for messages changes to load media
-watch(() => contactsStore.messages, () => {
-  try {
-  } catch (e) {
-    console.error('Error loading media:', e)
-  }
+// Prefetch media with org header (plain <img src> cannot send X-Organization-ID).
+watch(() => contactsStore.messages, (messages) => {
+  void prefetchAllMedia(messages)
 }, { deep: true })
 
 async function switchAccount(accountName: string) {
@@ -743,10 +755,7 @@ async function switchAccount(accountName: string) {
   contactsStore.setAccountFilter(accountName)
   await contactsStore.fetchMessages(contactsStore.currentContact.id, { account: accountName })
   await nextTick()
-  try {
-  } catch (e) {
-    console.error('Error loading media:', e)
-  }
+  void prefetchAllMedia(contactsStore.messages)
   scrollToBottom(true)
 }
 
@@ -1460,6 +1469,27 @@ function getMessageContent(message: Message): string {
   return '[Message]'
 }
 
+function parseUnsupportedPayload(message: Message): { error_code?: number; unsupported_type?: string } | null {
+  const raw = typeof message.content === 'string' ? message.content : message.content?.body
+  if (typeof raw !== 'string' || !raw.startsWith('{')) return null
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
+function getUnsupportedMessageText(message: Message): string {
+  const parsed = parseUnsupportedPayload(message)
+  if (parsed?.error_code === 131060) {
+    return t('chat.unavailableCoexistenceMessage')
+  }
+  if (parsed?.unsupported_type) {
+    return t('chat.unsupportedMessageWithType', { type: parsed.unsupported_type })
+  }
+  return t('chat.unsupportedMessage')
+}
+
 interface LocationData {
   latitude: number
   longitude: number
@@ -1581,8 +1611,12 @@ function isMediaMessage(message: Message): boolean {
 
 function getMediaUrl(message: Message): string {
   if (!message.media_url) return ''
-  const basePath = ((window as any).__BASE_PATH__ ?? '').replace(/\/$/, '')
-  return `${basePath}/api/media/${message.id}`
+  void prefetchMedia(message)
+  return mediaUrls.value[message.id] || ''
+}
+
+function hasResolvedMedia(message: Message): boolean {
+  return !!message.media_url && !!mediaUrls.value[message.id]
 }
 
 // Every media attachment in the open conversation, in chronological order, that
@@ -1616,8 +1650,11 @@ function openMediaPreview(message: Message) {
 }
 
 function handleImageError(event: Event) {
+  // Only hide if we had a real URL — empty src errors during async prefetch are ignored.
   const img = event.target as HTMLImageElement
-  img.style.display = 'none'
+  if (img.src && !img.src.endsWith('/')) {
+    img.style.display = 'none'
+  }
 }
 
 function handleMediaError(event: Event, mediaType: string) {
@@ -2151,8 +2188,9 @@ async function sendMediaMessage() {
                 <!-- Template header media (image/video/document shown above template text) -->
                 <div v-if="message.message_type === 'template' && message.media_url" class="mb-2">
                   <img
-                    v-if="message.media_mime_type?.startsWith('image/')"
-                    :src="getMediaUrl(message)"
+                    v-if="hasResolvedMedia(message) && message.media_mime_type?.startsWith('image/')"
+                    :src="mediaUrls[message.id]"
+                    :key="mediaUrls[message.id]"
                     alt="Template header"
                     class="max-w-[280px] max-h-[300px] rounded-lg cursor-pointer object-cover"
                     @click="openMediaPreview(message)"
@@ -2186,17 +2224,25 @@ async function sendMediaMessage() {
                 <!-- Image message -->
                 <div v-else-if="message.message_type === 'image' && message.media_url" class="mb-2">
                   <img
-                    :src="getMediaUrl(message)"
+                    v-if="hasResolvedMedia(message)"
+                    :src="mediaUrls[message.id]"
+                    :key="mediaUrls[message.id]"
                     :alt="message.content?.body || 'Image'"
                     class="max-w-[280px] max-h-[300px] rounded-lg cursor-pointer object-cover"
                     @click="openMediaPreview(message)"
                     @error="handleImageError($event)"
                   />
+                  <span
+                    v-else-if="hasMediaLoadFailed(message.id)"
+                    class="text-muted-foreground italic text-sm"
+                  >[Image]</span>
                 </div>
                 <!-- Sticker message -->
                 <div v-else-if="message.message_type === 'sticker' && message.media_url" class="mb-2">
                   <img
-                    :src="getMediaUrl(message)"
+                    v-if="hasResolvedMedia(message)"
+                    :src="mediaUrls[message.id]"
+                    :key="mediaUrls[message.id]"
                     alt="Sticker"
                     class="max-w-[128px] max-h-[128px] cursor-pointer"
                     @click="openMediaPreview(message)"
@@ -2295,7 +2341,7 @@ async function sendMediaMessage() {
                 <div v-else-if="message.message_type === 'unsupported'" class="mb-2">
                   <div class="flex items-center gap-2 px-3 py-2 bg-muted/50 rounded-lg text-muted-foreground">
                     <AlertCircle class="h-4 w-4 shrink-0" />
-                    <span class="text-sm italic">{{ $t('chat.unsupportedMessage') }}</span>
+                    <span class="text-sm italic">{{ getUnsupportedMessageText(message) }}</span>
                   </div>
                 </div>
                 <!-- Button reply - WhatsApp style -->
@@ -2364,7 +2410,7 @@ async function sendMediaMessage() {
                   </div>
                 </div>
                 <!-- Time for messages without text content -->
-                <span v-if="!getMessageContent(message) && !(isMediaMessage(message) && !message.media_url)" class="chat-bubble-time block clear-both">
+                <span v-if="!getMessageContent(message) && !(isMediaMessage(message) && !message.media_url) && !(message.message_type === 'image' && message.media_url && !hasResolvedMedia(message) && !hasMediaLoadFailed(message.id))" class="chat-bubble-time block clear-both">
                   <span>{{ formatMessageTime(message.created_at) }}</span>
                   <component
                     v-if="message.direction === 'outgoing'"

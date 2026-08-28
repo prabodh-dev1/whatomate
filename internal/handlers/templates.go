@@ -74,6 +74,12 @@ func (a *App) ListTemplates(r *fastglue.Request) error {
 
 	query := a.DB.Where("organization_id = ?", orgID)
 
+	// Never list templates that belong to a deleted/replaced WhatsApp account.
+	liveAccounts := a.DB.Model(&models.WhatsAppAccount{}).
+		Select("name").
+		Where("organization_id = ?", orgID)
+	query = query.Where("whats_app_account IN (?)", liveAccounts)
+
 	if accountName != "" {
 		query = query.Where("whats_app_account = ?", accountName)
 	}
@@ -482,8 +488,8 @@ func (a *App) SyncTemplates(r *fastglue.Request) error {
 	// Fetch templates from Meta API
 	templates, err := a.fetchTemplatesFromMeta(account)
 	if err != nil {
-		a.Log.Error("Failed to fetch templates from Meta", "error", err)
-		return r.SendErrorEnvelope(fasthttp.StatusBadGateway, "Failed to fetch templates from Meta", nil, "")
+		a.Log.Error("Failed to fetch templates from Meta", "error", err, "account", account.Name)
+		return r.SendErrorEnvelope(fasthttp.StatusBadGateway, "Failed to fetch templates from Meta: "+err.Error(), nil, "")
 	}
 
 	// Sync to database

@@ -81,8 +81,13 @@ async function fetchAccounts() {
   try {
     const response = await accountsService.list()
     accounts.value = response.data.data?.accounts || []
-    if (selectedAccount.value !== 'all' && !accounts.value.some(a => a.name === selectedAccount.value)) {
-      selectedAccount.value = 'all'; localStorage.setItem('flows_selected_account', 'all')
+    const storedStillExists = accounts.value.some(a => a.name === selectedAccount.value)
+    if (selectedAccount.value !== 'all' && !storedStillExists) {
+      selectedAccount.value = accounts.value.length === 1 ? accounts.value[0].name : 'all'
+      localStorage.setItem('flows_selected_account', selectedAccount.value)
+    } else if (selectedAccount.value === 'all' && accounts.value.length === 1) {
+      selectedAccount.value = accounts.value[0].name
+      localStorage.setItem('flows_selected_account', selectedAccount.value)
     }
   } catch { /* ignore */ }
 }

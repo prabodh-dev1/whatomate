@@ -131,6 +131,11 @@ type IncomingTextMessage struct {
 			Type  string `json:"type,omitempty"`
 		} `json:"phones,omitempty"`
 	} `json:"contacts,omitempty"`
+	// Present when type is "unsupported" (Cloud API 131051 / 131060).
+	Errors      []WebhookStatusError `json:"errors,omitempty"`
+	Unsupported *struct {
+		Type string `json:"type"`
+	} `json:"unsupported,omitempty"`
 }
 
 // processIncomingMessageFull processes incoming WhatsApp messages with chatbot logic
@@ -192,6 +197,12 @@ func (a *App) processIncomingMessageFull(phoneNumberID string, msg IncomingTextM
 		replyToWAMID = msg.Context.ID
 	}
 	a.saveIncomingMessage(account, contact, msg.ID, messageType, messageText, mediaInfo, replyToWAMID)
+
+	// Meta delivers type=unsupported with no usable body (131051/131060).
+	// The JSON we store is for the UI, not for keyword/AI matching.
+	if msg.Type == "unsupported" {
+		return
+	}
 
 	// Clear chatbot tracking since client has replied
 	a.ClearContactChatbotTracking(contact.ID)
@@ -1530,6 +1541,28 @@ func (a *App) extractMessageContent(ctx context.Context, msg IncomingTextMessage
 		if jsonBytes, err := json.Marshal(contactsData); err == nil {
 			extracted.Text = string(jsonBytes)
 		}
+	} else if msg.Type == "unsupported" {
+		payload := map[string]any{}
+		if len(msg.Errors) > 0 {
+			payload["error_code"] = msg.Errors[0].Code
+			payload["title"] = msg.Errors[0].Title
+			details := msg.Errors[0].ErrorData.Details
+			if details == "" {
+				details = msg.Errors[0].Message
+			}
+			payload["details"] = details
+		}
+		if msg.Unsupported != nil && msg.Unsupported.Type != "" {
+			payload["unsupported_type"] = msg.Unsupported.Type
+		}
+		a.Log.Info("Received unsupported inbound message",
+			"error_code", payload["error_code"],
+			"unsupported_type", payload["unsupported_type"],
+			"details", payload["details"],
+		)
+		if jsonBytes, err := json.Marshal(payload); err == nil {
+			extracted.Text = string(jsonBytes)
+		}
 	}
 
 	return extracted
@@ -1596,7 +1629,9 @@ func (a *App) saveIncomingMessage(account *models.WhatsAppAccount, contact *mode
 	if len(preview) > 100 {
 		preview = preview[:97] + "..."
 	}
-	if msgType != "text" && msgType != "button_reply" && msgType != "nfm_reply" {
+	if msgType == "unsupported" {
+		preview = "Message unavailable"
+	} else if msgType != "text" && msgType != "button_reply" && msgType != "nfm_reply" {
 		preview = "[" + msgType + "]"
 	}
 

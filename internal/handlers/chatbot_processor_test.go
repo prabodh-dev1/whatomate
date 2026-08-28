@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -738,6 +739,34 @@ func TestMatchFlowTrigger_Match(t *testing.T) {
 	// No match
 	noMatch := app.matchFlowTrigger(org.ID, "hello there")
 	assert.Nil(t, noMatch)
+}
+
+func TestExtractMessageContent_UnsupportedCoexistence(t *testing.T) {
+	t.Parallel()
+	app := &App{Log: testutil.NopLogger()}
+
+	got := app.extractMessageContent(context.Background(), IncomingTextMessage{
+		Type: "unsupported",
+		Errors: []WebhookStatusError{{
+			Code:    131060,
+			Title:   "This message is currently unavailable.",
+			Message: "This message is currently unavailable.",
+			ErrorData: struct {
+				Details string `json:"details"`
+			}{Details: "The message is currently unavailable."},
+		}},
+		Unsupported: &struct {
+			Type string `json:"type"`
+		}{Type: "image"},
+	}, &models.WhatsAppAccount{})
+
+	assert.Equal(t, "unsupported", got.Type)
+	require.NotEmpty(t, got.Text)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(got.Text), &payload))
+	assert.EqualValues(t, 131060, payload["error_code"])
+	assert.Equal(t, "image", payload["unsupported_type"])
 }
 
 // =============================================================================

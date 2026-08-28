@@ -224,6 +224,9 @@ func TestApp_TestAccountConnection_NotVerifiedRejected(t *testing.T) {
 	meta.phoneFn = func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"display_phone_number":"+1234","verified_name":"Real Co","account_mode":"LIVE","code_verification_status":"NOT_VERIFIED"}`))
 	}
+	meta.listFn = func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"phone-1"}]}`))
+	}
 
 	req := testutil.NewGETRequest(t)
 	testutil.SetAuthContext(req, org.ID, uuid.New())
@@ -237,6 +240,39 @@ func TestApp_TestAccountConnection_NotVerifiedRejected(t *testing.T) {
 	require.NoError(t, json.Unmarshal(testutil.GetResponseBody(req), &resp))
 	assert.Equal(t, false, resp.Data["success"])
 	assert.Contains(t, resp.Data["error"], "not verified")
+}
+
+func TestApp_TestAccountConnection_CoexistencePending_NotCloudAPIFailure(t *testing.T) {
+	meta := newFakeMetaServer(t)
+	app := newAppWithMeta(t, meta)
+	org := testutil.CreateTestOrganization(t, app.DB)
+	acc := createTestAccountForValidation(t, app.DB, org.ID, "phone-1", "biz-1")
+	require.NoError(t, app.DB.Model(acc).Update("is_smb", true).Error)
+	acc.IsSMB = true
+
+	meta.phoneFn = func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"display_phone_number":"+91 76759 64023","verified_name":"Prabodh","account_mode":"LIVE","code_verification_status":"NOT_VERIFIED","is_on_biz_app":false,"platform_type":"NOT_APPLICABLE","status":"PENDING"}`))
+	}
+	meta.listFn = func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"phone-1"}]}`))
+	}
+
+	req := testutil.NewGETRequest(t)
+	testutil.SetAuthContext(req, org.ID, uuid.New())
+	testutil.SetPathParam(req, "id", acc.ID.String())
+
+	require.NoError(t, app.TestAccountConnection(req))
+
+	var resp struct {
+		Data map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(testutil.GetResponseBody(req), &resp))
+	assert.Equal(t, true, resp.Data["success"])
+	assert.Equal(t, false, resp.Data["ready_to_send"])
+	assert.Equal(t, "coexistence", resp.Data["mode"])
+	warn, _ := resp.Data["warning"].(string)
+	assert.Contains(t, warn, "WhatsApp Business")
+	assert.NotContains(t, warn, "business.facebook.com/wa/manage/phone-numbers")
 }
 
 func TestApp_TestAccountConnection_PhoneNotInBusiness(t *testing.T) {
